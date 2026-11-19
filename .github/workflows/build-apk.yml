@@ -62,7 +62,7 @@ jobs:
           gradle :app:testDebugUnitTest :app:assembleDebug \
             --no-daemon \
             --no-configuration-cache \
-            -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8" \
+            -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8 -Djava.awt.headless=true" \
             -Dorg.gradle.workers.max=2
 
       - name: Verify APK integrity & prepare shareable APK files
