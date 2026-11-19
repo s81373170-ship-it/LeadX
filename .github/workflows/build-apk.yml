@@ -34,13 +34,23 @@ jobs:
       - name: Accept Android SDK licenses & install compileSdk 36.1 + build-tools
         run: |
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          export ANDROID_HOME="$SDK_ROOT"
+          export ANDROID_SDK_ROOT="$SDK_ROOT"
           mkdir -p "$SDK_ROOT/licenses"
           printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n84831b9409646a918e30573bab4c9c91346d8abd\nd56f5187479451eabf01fb78af6dfcb131a6481e\n" > "$SDK_ROOT/licenses/android-sdk-license"
           printf "\n84831b9409646a918e30573bab4c9c91346d8abd\n" > "$SDK_ROOT/licenses/android-sdk-preview-license"
           printf "\nd975f751698a77b662f1254ddbeed3901e976f5a\n" > "$SDK_ROOT/licenses/intel-android-extra-license"
           yes | sdkmanager --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
+          echo "Available Android 36 SDK packages:"
+          sdkmanager --sdk_root="$SDK_ROOT" --list 2>/dev/null | grep -E "platforms;android-36|build-tools;36" || true
           sdkmanager --sdk_root="$SDK_ROOT" --install "platform-tools" "build-tools;36.0.0" "platforms;android-36"
-          sdkmanager --sdk_root="$SDK_ROOT" --install "platforms;android-36.1" || true
+          EXTRA_36_PKG="$(sdkmanager --sdk_root="$SDK_ROOT" --list 2>/dev/null | grep -oE 'platforms;android-36[^ |]*' | grep -v '^platforms;android-36$' | sort -V | tail -n 1 || true)"
+          if [ -n "$EXTRA_36_PKG" ]; then
+            echo "Installing minor platform package: $EXTRA_36_PKG"
+            sdkmanager --sdk_root="$SDK_ROOT" --install "$EXTRA_36_PKG" || true
+          else
+            sdkmanager --sdk_root="$SDK_ROOT" --install "platforms;android-36.1" || true
+          fi
 
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
@@ -58,12 +68,22 @@ jobs:
       - name: Run Web companion tests
         run: node --test website/website.test.mjs
 
-      - name: Run Android unit tests & build Debug APK
+      - name: Build Debug APK (:app:assembleDebug)
         run: |
-          gradle :app:testDebugUnitTest :app:assembleDebug \
+          gradle :app:assembleDebug \
             --no-daemon \
             --no-configuration-cache \
-            -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8 -Djava.awt.headless=true" \
+            --stacktrace \
+            -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8 -Djava.awt.headless=true" \
+            -Dorg.gradle.workers.max=2
+
+      - name: Run Android unit & Robolectric tests (:app:testDebugUnitTest)
+        run: |
+          gradle :app:testDebugUnitTest \
+            --no-daemon \
+            --no-configuration-cache \
+            --stacktrace \
+            -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8 -Djava.awt.headless=true" \
             -Dorg.gradle.workers.max=2
 
       - name: Verify APK integrity & prepare shareable APK files
