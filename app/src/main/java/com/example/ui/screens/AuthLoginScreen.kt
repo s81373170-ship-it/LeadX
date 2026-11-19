@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Badge
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Visibility
@@ -33,6 +34,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -77,6 +79,7 @@ fun AuthLoginScreen(
   onConnectGoogle: () -> Unit,
   onSignOutGoogle: () -> Unit,
   onOpenShareApk: () -> Unit = {},
+  onOpenHowToInstall: () -> Unit = {},
   onDismissFlash: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -308,6 +311,20 @@ fun AuthLoginScreen(
           Text(
             text = "Share Installable App (.apk) / Download Link",
             color = InkBlack,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+        Spacer(Modifier.height(4.dp))
+        TextButton(
+          onClick = onOpenHowToInstall,
+          enabled = !isBusy,
+          modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("login_how_to_install_button"),
+        ) {
+          Icon(Icons.Rounded.Info, contentDescription = null, tint = InkGraphite, modifier = Modifier.size(16.dp))
+          Spacer(Modifier.width(6.dp))
+          Text(
+            text = "How to Install (.apk) · Unknown Sources Guide",
+            color = InkGraphite,
             fontWeight = FontWeight.SemiBold,
           )
         }

@@ -85,6 +85,7 @@ import com.example.model.AutoFetchConfig
 import com.example.model.AutoFetchRunLog
 import com.example.model.TeamAccount
 import com.example.model.UiState
+import com.example.ui.components.HowToInstallModal
 import com.example.ui.components.SectionLabel
 import com.example.ui.components.ShareAppApkSheet
 import com.example.ui.screens.AuthLoginScreen
@@ -196,6 +197,7 @@ private fun RoleNavigatedWorkspace(
 
   var showApiKeysSheet by rememberSaveable { mutableStateOf(false) }
   var showShareApkSheet by rememberSaveable { mutableStateOf(false) }
+  var showHowToInstallModal by rememberSaveable { mutableStateOf(false) }
   var apiConfigVersion by rememberSaveable { mutableIntStateOf(0) }
   var googleConnecting by rememberSaveable { mutableStateOf(false) }
 
@@ -313,6 +315,13 @@ private fun RoleNavigatedWorkspace(
   if (showShareApkSheet) {
     ShareAppApkSheet(
       onDismiss = { showShareApkSheet = false },
+      onFeedback = viewModel::showFlash,
+    )
+  }
+
+  if (showHowToInstallModal) {
+    HowToInstallModal(
+      onDismiss = { showHowToInstallModal = false },
       onFeedback = viewModel::showFlash,
     )
   }
@@ -477,6 +486,7 @@ private fun RoleNavigatedWorkspace(
           onConnectGoogle = connectGoogleCloud,
           onSignOutGoogle = signOutGoogleCloud,
           onOpenShareApk = { showShareApkSheet = true },
+          onOpenHowToInstall = { showHowToInstallModal = true },
           onDismissFlash = viewModel::clearFlash,
           modifier = Modifier.padding(innerPadding),
         )
@@ -516,6 +526,7 @@ private fun RoleNavigatedWorkspace(
           onSignOutGoogle = signOutGoogleCloud,
           onOpenApiKeys = { showApiKeysSheet = true },
           onOpenShareApk = { showShareApkSheet = true },
+          onOpenHowToInstall = { showHowToInstallModal = true },
         )
       } else {
         Box(Modifier.fillMaxSize().background(PaperBackground), contentAlignment = Alignment.Center) {
@@ -580,6 +591,7 @@ private fun RoleNavigatedWorkspace(
           onSignOutGoogle = signOutGoogleCloud,
           onOpenApiKeys = { showApiKeysSheet = true },
           onOpenShareApk = { showShareApkSheet = true },
+          onOpenHowToInstall = { showHowToInstallModal = true },
         )
       } else {
         Box(Modifier.fillMaxSize().background(PaperBackground), contentAlignment = Alignment.Center) {
@@ -614,6 +626,7 @@ private fun RoleDashboardShell(
   onSignOutGoogle: () -> Unit,
   onOpenApiKeys: () -> Unit,
   onOpenShareApk: () -> Unit,
+  onOpenHowToInstall: () -> Unit,
 ) {
   BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
     val useRail = maxWidth >= 700.dp
@@ -712,6 +725,7 @@ private fun RoleDashboardShell(
               onOpenTransferScreen = onOpenTransferScreen,
               onExportOwnerCsv = onExportOwnerCsv,
               onOpenShareApk = onOpenShareApk,
+              onOpenHowToInstall = onOpenHowToInstall,
             )
           AppTab.FETCH -> {
             val scopedLeads =

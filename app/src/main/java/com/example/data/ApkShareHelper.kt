@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.example.BuildConfig
 import kotlinx.coroutines.Dispatchers
@@ -38,11 +39,11 @@ data class SavedApkResult(
 
 object ApkShareHelper {
   const val DIRECT_APK_DOWNLOAD_URL =
-    "https://github.com/s81373170-ship-it/Linkedin-data-apk/releases/latest/download/LeadX-Pro.apk"
+    "https://github.com/s81373170-ship-it/LeadX/releases/latest/download/LeadX-Pro.apk"
   const val WEB_PORTAL_DOWNLOAD_URL =
-    "https://s81373170-ship-it.github.io/Linkedin-data-apk/"
+    "https://s81373170-ship-it.github.io/LeadX/"
   const val GITHUB_RELEASES_PAGE_URL =
-    "https://github.com/s81373170-ship-it/Linkedin-data-apk/releases/latest"
+    "https://github.com/s81373170-ship-it/LeadX/releases/latest"
 
   fun sanitizeApkFileName(versionName: String = BuildConfig.VERSION_NAME): String {
     val cleanVersion = versionName.trim().ifBlank { "1.0" }.replace(Regex("[^A-Za-z0-9._-]"), "_")
@@ -283,6 +284,54 @@ object ApkShareHelper {
       appendLine("2. Tap LeadX-Pro.apk in Chrome Downloads or your Files app (avoid installing directly inside WhatsApp if your phone shows a parse error)")
       append("3. Allow 'Install unknown apps' if prompted and tap Install")
     }
+
+  fun buildInstallInstructionsText(versionName: String = BuildConfig.VERSION_NAME): String =
+    buildString {
+      appendLine("How to Install LeadX Pro (v$versionName) on Android:")
+      appendLine("1. Download LeadX-Pro.apk in Chrome:")
+      appendLine("   $DIRECT_APK_DOWNLOAD_URL")
+      appendLine("2. Open LeadX-Pro.apk from Chrome Downloads or your Files app (avoid installing directly inside WhatsApp on Realme/Oppo/Xiaomi phones).")
+      appendLine("3. When Android asks, tap Settings and turn ON 'Allow from this source' (Install unknown apps) for Chrome or Files.")
+      appendLine("   Manual path: Settings -> Apps -> Special app access -> Install unknown apps -> Chrome / Files -> Allow.")
+      append("4. Tap Back and choose Install (if Play Protect prompts, tap More details -> Install anyway).")
+    }
+
+  fun copyInstallGuide(context: Context): Boolean {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return false
+    clipboard.setPrimaryClip(
+      ClipData.newPlainText("How to Install LeadX Pro APK", buildInstallInstructionsText()),
+    )
+    return true
+  }
+
+  fun openUnknownAppSourcesSettings(context: Context): Boolean {
+    val attempts =
+      buildList {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          add(
+            Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+              addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
+          )
+        }
+        add(
+          Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          },
+        )
+        add(
+          Intent(Settings.ACTION_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          },
+        )
+      }
+    for (intent in attempts) {
+      if (runCatching { context.startActivity(intent) }.isSuccess) {
+        return true
+      }
+    }
+    return false
+  }
 
   fun openUrlInBrowser(context: Context, url: String = DIRECT_APK_DOWNLOAD_URL): Boolean {
     return runCatching {

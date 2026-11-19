@@ -39,7 +39,9 @@ jobs:
           printf "\n84831b9409646a918e30573bab4c9c91346d8abd\n" > "$SDK_ROOT/licenses/android-sdk-preview-license"
           printf "\nd975f751698a77b662f1254ddbeed3901e976f5a\n" > "$SDK_ROOT/licenses/intel-android-extra-license"
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager --install "platform-tools" "build-tools;36.0.0" "platforms;android-36.1" || sdkmanager --install "platform-tools" "build-tools;36.0.0" "platforms;android-36"
+          sdkmanager --install "platform-tools" "build-tools;36.0.0" "platforms;android-36.1" "platforms;android-36" || \
+            sdkmanager --install "platform-tools" "build-tools;36.0.0" "platforms;android-36.1" || \
+            sdkmanager --install "platform-tools" "build-tools;36.0.0" "platforms;android-36"
 
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4

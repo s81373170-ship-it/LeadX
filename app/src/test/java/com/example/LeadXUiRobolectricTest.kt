@@ -27,16 +27,27 @@ class LeadXUiRobolectricTest {
 
   @Test
   fun fullStartup_ownerEmployeeAndAllFeatureFlowsWorkWithoutCrashing() {
-    // 1. Login screen renders, Share App APK sheet opens cleanly, & quick fill owner works
+    // 1. Login screen renders, How to Install & Share App APK sheets open cleanly, & quick fill owner works
     composeRule.waitUntil(timeoutMillis = 10_000) {
       composeRule.onAllNodesWithTag("quick_fill_owner").fetchSemanticsNodes().isNotEmpty()
     }
+    composeRule.onNodeWithTag("login_how_to_install_button").performScrollTo().assertIsDisplayed().performClick()
+    composeRule.waitUntil(timeoutMillis = 5_000) {
+      composeRule.onAllNodesWithTag("how_to_install_modal").fetchSemanticsNodes().isNotEmpty()
+    }
+    composeRule.onNodeWithTag("open_unknown_sources_settings_button").performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithTag("copy_install_guide_button").performScrollTo().assertIsDisplayed().performClick()
+    composeRule.waitUntil(timeoutMillis = 5_000) {
+      composeRule.onAllNodesWithTag("how_to_install_modal").fetchSemanticsNodes().isEmpty()
+    }
+
     composeRule.onNodeWithTag("login_share_apk_button").performScrollTo().assertIsDisplayed().performClick()
     composeRule.waitUntil(timeoutMillis = 5_000) {
       composeRule.onAllNodesWithTag("copy_apk_link_button").fetchSemanticsNodes().isNotEmpty()
     }
     composeRule.onNodeWithTag("share_apk_file_button").assertIsDisplayed()
     composeRule.onNodeWithTag("save_apk_downloads_button").assertIsDisplayed()
+    composeRule.onNodeWithTag("how_to_install_button").performScrollTo().assertIsDisplayed()
     composeRule.onNodeWithTag("open_apk_link_browser_button").performScrollTo().assertIsDisplayed()
     composeRule.onNodeWithTag("copy_apk_link_button").performScrollTo().performClick()
     composeRule.waitUntil(timeoutMillis = 5_000) {
@@ -46,11 +57,20 @@ class LeadXUiRobolectricTest {
     composeRule.onNodeWithTag("quick_fill_owner").performScrollTo().assertIsDisplayed().performClick()
     composeRule.onNodeWithTag("login_submit_button").performScrollTo().assertIsDisplayed().performClick()
 
-    // 2. Owner Dashboard renders, Share APK sheet works from Dashboard, & Top-Up Modal updates balance
+    // 2. Owner Dashboard renders, How to Install & Share APK sheets work from Dashboard, & Top-Up Modal updates balance
     composeRule.waitUntil(timeoutMillis = 10_000) {
       composeRule.onAllNodesWithTag("wallet_balance_text").fetchSemanticsNodes().isNotEmpty()
     }
     composeRule.onNodeWithTag("wallet_balance_text").assertIsDisplayed()
+    composeRule.onNodeWithTag("dashboard_how_to_install_button").performScrollTo().assertIsDisplayed().performClick()
+    composeRule.waitUntil(timeoutMillis = 5_000) {
+      composeRule.onAllNodesWithTag("how_to_install_modal").fetchSemanticsNodes().isNotEmpty()
+    }
+    composeRule.onNodeWithTag("close_how_to_install_button").performClick()
+    composeRule.waitUntil(timeoutMillis = 5_000) {
+      composeRule.onAllNodesWithTag("how_to_install_modal").fetchSemanticsNodes().isEmpty()
+    }
+
     composeRule.onNodeWithTag("dashboard_share_apk_button").performScrollTo().assertIsDisplayed().performClick()
     composeRule.waitUntil(timeoutMillis = 5_000) {
       composeRule.onAllNodesWithTag("share_apk_link_button").fetchSemanticsNodes().isNotEmpty()

@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Android
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -71,6 +72,14 @@ fun ShareAppApkSheet(
   val status = remember(context) { ApkShareHelper.inspectInstalledApk(context) }
   var isExportingApk by remember { mutableStateOf(false) }
   var isSavingDownloads by remember { mutableStateOf(false) }
+  var showHowToInstall by remember { mutableStateOf(false) }
+
+  if (showHowToInstall) {
+    HowToInstallModal(
+      onDismiss = { showHowToInstall = false },
+      onFeedback = onFeedback,
+    )
+  }
 
   ModalBottomSheet(
     onDismissRequest = onDismiss,
@@ -300,6 +309,18 @@ fun ShareAppApkSheet(
         Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null, tint = InkBlack, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(6.dp))
         Text("Open GitHub Releases in Chrome", color = InkBlack, fontWeight = FontWeight.Bold)
+      }
+
+      Spacer(Modifier.height(8.dp))
+      OutlinedButton(
+        onClick = { showHowToInstall = true },
+        border = BorderStroke(1.dp, InkBlack),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("how_to_install_button"),
+      ) {
+        Icon(Icons.AutoMirrored.Rounded.HelpOutline, contentDescription = null, tint = InkBlack, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("How to Install (Unknown Sources Guide)", color = InkBlack, fontWeight = FontWeight.Bold)
       }
 
       Spacer(Modifier.height(10.dp))

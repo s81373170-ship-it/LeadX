@@ -19,7 +19,15 @@ import {
 const STORAGE_KEY = "leadx_pro_web_workspace_v1";
 const API_KEYS_STORAGE_KEY = "leadx_pro_web_api_keys_v1";
 const FIRESTORE_DB_ID = "ai-studio-android-leadbrid-ecb9535c-5b52-48e9-8699-b638d1f3604c";
-const GITHUB_RELEASE_APK_URL = "https://github.com/s81373170-ship-it/Linkedin-data-apk/releases/latest/download/LeadX-Pro.apk";
+const GITHUB_RELEASE_APK_URL = "https://github.com/s81373170-ship-it/LeadX/releases/latest/download/LeadX-Pro.apk";
+const INSTALL_GUIDE_TEXT = [
+  "How to Install LeadX Pro (.apk) on Android:",
+  `1. Download LeadX-Pro.apk in Chrome: ${GITHUB_RELEASE_APK_URL}`,
+  "2. Open LeadX-Pro.apk from Chrome Downloads or your Files app (avoid tapping inside WhatsApp on Realme/Oppo/Xiaomi).",
+  "3. Tap Settings when prompted and turn ON 'Allow from this source' ('Install from unknown sources') for Chrome or Files.",
+  "   Manual path: Settings -> Apps -> Special app access -> Install unknown apps -> Chrome / Files -> Allow.",
+  "4. Return and tap Install (if Play Protect prompts, tap More details -> Install anyway).",
+].join("\n");
 
 function getApkDownloadUrl() {
   if (typeof window !== "undefined" && window.location?.hostname?.endsWith("github.io")) {
@@ -360,6 +368,7 @@ const state = {
   candidates: [],
   vehicleResult: null,
   topUpModalOpen: false,
+  howToInstallModalOpen: false,
   topUpAmount: "5000",
   banner: null,
   busy: false,
@@ -768,9 +777,11 @@ function renderLoginView() {
             <a class="btn btn-primary" href="${esc(getApkDownloadUrl())}" download="LeadX-Pro.apk" style="text-decoration:none;">Download LeadX-Pro.apk</a>
             <button type="button" class="btn btn-outline" id="share-apk-url-btn">Share Permanent Link</button>
           </div>
+          <button type="button" class="btn btn-subtle" id="how-to-install-btn">How to Install (.apk) · Unknown Sources Guide</button>
         </div>
       </div>
     </div>
+    ${renderHowToInstallModal()}
   `;
 }
 
@@ -1174,6 +1185,42 @@ function renderSettingsScreen() {
   `;
 }
 
+function renderHowToInstallModal() {
+  if (!state.howToInstallModalOpen) return "";
+  return `
+    <div class="modal-backdrop" id="install-guide-backdrop">
+      <div class="modal-card stack" style="max-width:540px;max-height:90vh;overflow:auto;">
+        <div class="row-between">
+          <div>
+            <div class="section-label">Android Sideload Guide</div>
+            <h2 style="margin:4px 0 0;">How to Install LeadX Pro (.apk)</h2>
+          </div>
+          <button type="button" class="btn btn-subtle btn-sm" id="close-install-guide-btn">✕</button>
+        </div>
+        <div class="banner warning">
+          <span>Why shared APKs look blocked: Android disables <strong>Install from unknown sources</strong> by default for Chrome, Files, and WhatsApp until enabled once.</span>
+        </div>
+        <div class="card" style="padding:14px;">
+          <div class="section-label">Step 01 · Open in Chrome Downloads or Files</div>
+          <p style="margin:6px 0 0;font-size:13px;color:var(--graphite);">Open <strong>LeadX-Pro.apk</strong> from Chrome Downloads or your Files app. On Realme, Oppo (ColorOS), or Xiaomi devices, avoid tapping inside WhatsApp directly.</p>
+        </div>
+        <div class="card" style="padding:14px;">
+          <div class="section-label">Step 02 · Enable 'Install from unknown sources'</div>
+          <p style="margin:6px 0 0;font-size:13px;color:var(--graphite);">When Android prompts <em>"For your security, your phone isn't allowed to install unknown apps"</em>, tap <strong>Settings</strong> and toggle ON <strong>Allow from this source</strong> for Chrome or Files (<code>Settings → Apps → Special app access → Install unknown apps</code>).</p>
+        </div>
+        <div class="card" style="padding:14px;">
+          <div class="section-label">Step 03 · Tap Install Universal APK</div>
+          <p style="margin:6px 0 0;font-size:13px;color:var(--graphite);">Return to the installer and tap <strong>Install</strong>. LeadX Pro is distributed as a standard universal <code>.apk</code> (not a split <code>.aab</code> bundle). If Play Protect prompts, tap <em>More details → Install anyway</em>.</p>
+        </div>
+        <div class="grid-2">
+          <button type="button" class="btn btn-primary" id="copy-install-guide-btn">Copy Install Guide</button>
+          <button type="button" class="btn btn-outline" id="dismiss-install-guide-btn">Done</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderTopUpModal(acc) {
   if (!state.topUpModalOpen) return "";
   return `
@@ -1231,12 +1278,14 @@ function render() {
         <button class="nav-btn ${state.route === "settings" ? "active" : ""}" data-nav="settings">API Keys &amp; Sync</button>
         <div style="margin-top:auto;padding-top:16px;" class="stack">
           <a class="btn btn-primary" href="${esc(getApkDownloadUrl())}" download="LeadX-Pro.apk" style="width:100%;text-decoration:none;">Download Android APK</a>
+          <button class="btn btn-subtle" style="width:100%;" id="sidebar-how-to-install-btn">How to Install (.apk)</button>
           <button class="btn btn-outline" style="width:100%;" id="sidebar-logout-btn">Switch Login ID</button>
         </div>
       </aside>
       <main class="main-stage">${content}</main>
     </div>
     ${renderTopUpModal(acc)}
+    ${renderHowToInstallModal()}
   `;
 
   bindAppEvents();
@@ -1244,6 +1293,25 @@ function render() {
 
 function runSafe(fn) {
   Promise.resolve().then(fn).catch((err) => setBanner(err.message || "Action failed.", "error"));
+}
+
+function bindHowToInstallModalEvents() {
+  const closeModal = () => {
+    state.howToInstallModalOpen = false;
+    render();
+  };
+  document.getElementById("close-install-guide-btn")?.addEventListener("click", closeModal);
+  document.getElementById("dismiss-install-guide-btn")?.addEventListener("click", closeModal);
+  document.getElementById("install-guide-backdrop")?.addEventListener("click", (e) => {
+    if (e.target.id === "install-guide-backdrop") closeModal();
+  });
+  document.getElementById("copy-install-guide-btn")?.addEventListener("click", () =>
+    runSafe(async () => {
+      await navigator.clipboard.writeText(INSTALL_GUIDE_TEXT);
+      state.howToInstallModalOpen = false;
+      setBanner("Install guide & Unknown Sources steps copied to clipboard.", "success");
+    })
+  );
 }
 
 function bindLoginEvents() {
@@ -1254,6 +1322,11 @@ function bindLoginEvents() {
   document.getElementById("share-apk-url-btn")?.addEventListener("click", () =>
     runSafe(copyOrShareApkLink)
   );
+  document.getElementById("how-to-install-btn")?.addEventListener("click", () => {
+    state.howToInstallModalOpen = true;
+    render();
+  });
+  bindHowToInstallModalEvents();
   document.getElementById("google-signin-btn")?.addEventListener("click", () =>
     runSafe(async () => {
       await cloud.signInGoogle();
@@ -1311,6 +1384,11 @@ function bindAppEvents() {
     render();
   };
   document.getElementById("sidebar-logout-btn")?.addEventListener("click", signOutTeam);
+  document.getElementById("sidebar-how-to-install-btn")?.addEventListener("click", () => {
+    state.howToInstallModalOpen = true;
+    render();
+  });
+  bindHowToInstallModalEvents();
   document.getElementById("switch-id-btn")?.addEventListener("click", signOutTeam);
 
   // Dashboard actions

@@ -121,6 +121,7 @@ fun DashboardHomeScreen(
   onOpenTransferScreen: () -> Unit,
   onExportOwnerCsv: () -> Unit,
   onOpenShareApk: () -> Unit = {},
+  onOpenHowToInstall: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   var showTopUpSheet by rememberSaveable { mutableStateOf(false) }
@@ -638,6 +639,14 @@ fun DashboardHomeScreen(
             Icon(Icons.Rounded.Share, contentDescription = null, tint = InkBlack, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(8.dp))
             Text("Share Installable App (.apk) / Link", color = InkBlack, fontWeight = FontWeight.Bold)
+          }
+          Spacer(Modifier.height(6.dp))
+          TextButton(
+            onClick = onOpenHowToInstall,
+            enabled = !isBusy,
+            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("dashboard_how_to_install_button"),
+          ) {
+            Text("How to Install (.apk Unknown Sources Guide)", color = InkGraphite, fontWeight = FontWeight.SemiBold)
           }
         }
       }

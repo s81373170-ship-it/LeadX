@@ -325,12 +325,21 @@ class LeadXDomainTest {
     assertEquals("LeadX-Pro-v1.0.25.apk", com.example.data.ApkShareHelper.sanitizeApkFileName("1.0.25"))
     assertEquals("LeadX-Pro-v1.0_beta.apk", com.example.data.ApkShareHelper.sanitizeApkFileName("1.0 beta"))
 
+    assertTrue(com.example.data.ApkShareHelper.DIRECT_APK_DOWNLOAD_URL.contains("s81373170-ship-it/LeadX/releases/latest/download/LeadX-Pro.apk"))
+    assertTrue(com.example.data.ApkShareHelper.WEB_PORTAL_DOWNLOAD_URL.contains("s81373170-ship-it.github.io/LeadX/"))
+
     val msg = com.example.data.ApkShareHelper.buildDownloadMessage("1.0.25")
     assertTrue(msg.contains(com.example.data.ApkShareHelper.DIRECT_APK_DOWNLOAD_URL))
     assertTrue(msg.contains(com.example.data.ApkShareHelper.WEB_PORTAL_DOWNLOAD_URL))
     assertTrue(msg.contains("LeadX-Pro.apk"))
 
+    val installGuide = com.example.data.ApkShareHelper.buildInstallInstructionsText("1.0.25")
+    assertTrue(installGuide.contains("Allow from this source"))
+    assertTrue(installGuide.contains("Install unknown apps"))
+    assertTrue(installGuide.contains(com.example.data.ApkShareHelper.DIRECT_APK_DOWNLOAD_URL))
+
     assertTrue(com.example.data.ApkShareHelper.copyDownloadLink(context))
+    assertTrue(com.example.data.ApkShareHelper.copyInstallGuide(context))
 
     // Rejects tiny / non-PK fake file
     val fakeApk = java.io.File(context.cacheDir, "fake_base.apk").apply {

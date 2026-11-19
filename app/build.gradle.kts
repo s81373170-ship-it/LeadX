@@ -86,6 +86,10 @@ android {
     includeInApk = false
     includeInBundle = true
   }
+  // Produce a single universal .apk file for direct sharing & installation (never split APKs)
+  splits {
+    abi { isEnable = false }
+  }
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
