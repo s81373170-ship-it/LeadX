@@ -1,0 +1,198 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidLoginId(loginId) {
+      return loginId is string && loginId.size() >= 3 && loginId.size() <= 24 && loginId.matches('^[A-Z0-9._-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.userId is string &&
+             data.userId == userId &&
+             data.role in ['owner', 'employee'] &&
+             isValidLoginId(data.activeLoginId) &&
+             data.fullName is string &&
+             data.fullName.size() >= 1 &&
+             data.fullName.size() <= 60;
+    }
+
+    function isValidTeamAccount(data, userId) {
+      return data.userId is string &&
+             data.userId == userId &&
+             isValidLoginId(data.loginId) &&
+             data.passwordHash is string &&
+             data.passwordHash.size() >= 8 &&
+             data.passwordHash.size() <= 128 &&
+             data.fullName is string &&
+             data.fullName.size() >= 1 &&
+             data.fullName.size() <= 60 &&
+             data.role in ['owner', 'employee'] &&
+             isValidLoginId(data.ownerAccountId) &&
+             data.balance is int &&
+             data.balance >= 0 &&
+             data.balance <= 100000000;
+    }
+
+    function isValidLeadRecord(data, userId) {
+      return data.userId is string &&
+             data.userId == userId &&
+             data.source in ['linkedin', 'numberplate'] &&
+             isValidLoginId(data.ownerAccountId) &&
+             isValidLoginId(data.fetchedByLoginId) &&
+             data.name is string &&
+             data.name.size() >= 1 &&
+             data.name.size() <= 100 &&
+             data.title is string &&
+             data.title.size() <= 140 &&
+             data.company is string &&
+             data.company.size() <= 120 &&
+             data.email is string &&
+             data.email.size() <= 120 &&
+             data.phone is string &&
+             data.phone.size() <= 40 &&
+             data.industry is string &&
+             data.industry.size() <= 140 &&
+             data.location is string &&
+             data.location.size() <= 120 &&
+             data.plateNumber is string &&
+             data.plateNumber.size() <= 20 &&
+             data.vehicleDetails is string &&
+             data.vehicleDetails.size() <= 240 &&
+             data.profileUrl is string &&
+             data.profileUrl.size() <= 300 &&
+             data.consentGranted is bool &&
+             data.pointsCost is int &&
+             data.pointsCost >= 0 &&
+             data.pointsCost <= 1000000;
+    }
+
+    function isValidPointTransaction(data, userId) {
+      return data.userId is string &&
+             data.userId == userId &&
+             data.type in ['topup', 'transfer_in', 'transfer_out', 'lead_linkedin', 'lead_vehicle'] &&
+             isValidLoginId(data.ownerAccountId) &&
+             isValidLoginId(data.loginId) &&
+             data.counterpartyId is string &&
+             data.counterpartyId.size() <= 24 &&
+             data.amount is int &&
+             data.amount >= -100000000 &&
+             data.amount <= 100000000 &&
+             data.amount != 0 &&
+             data.balanceAfter is int &&
+             data.balanceAfter >= 0 &&
+             data.balanceAfter <= 100000000 &&
+             data.note is string &&
+             data.note.size() >= 1 &&
+             data.note.size() <= 140;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create, update: if isOwner(userId) &&
+                               isValidUserProfile(incoming(), userId) &&
+                               incoming().keys().hasAll(['userId', 'role', 'activeLoginId', 'fullName', 'updatedAt']) &&
+                               incoming().keys().hasOnly(['userId', 'role', 'activeLoginId', 'fullName', 'updatedAt']) &&
+                               incoming().updatedAt is timestamp &&
+                               incoming().updatedAt <= request.time;
+      allow delete: if false;
+    }
+
+    match /users/{userId}/team_accounts/{accountId} {
+      allow get: if isOwner(userId) && isValidId(accountId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(accountId) &&
+                       isValidTeamAccount(incoming(), userId) &&
+                       incoming().keys().hasAll(['userId', 'loginId', 'passwordHash', 'fullName', 'role', 'ownerAccountId', 'balance', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'loginId', 'passwordHash', 'fullName', 'role', 'ownerAccountId', 'balance', 'createdAt', 'updatedAt']) &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp &&
+                       incoming().updatedAt <= request.time;
+
+      allow update: if isOwner(userId) &&
+                       isValidId(accountId) &&
+                       isValidTeamAccount(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().loginId == existing().loginId &&
+                       incoming().role == existing().role &&
+                       incoming().ownerAccountId == existing().ownerAccountId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp &&
+                       incoming().updatedAt <= request.time &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['balance', 'fullName', 'passwordHash', 'updatedAt']);
+
+      allow delete: if isOwner(userId) && isValidId(accountId);
+    }
+
+    match /users/{userId}/leads/{leadId} {
+      allow get: if isOwner(userId) && isValidId(leadId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(leadId) &&
+                       isValidLeadRecord(incoming(), userId) &&
+                       incoming().keys().hasAll(['userId', 'source', 'ownerAccountId', 'fetchedByLoginId', 'name', 'title', 'company', 'email', 'phone', 'industry', 'location', 'plateNumber', 'vehicleDetails', 'profileUrl', 'consentGranted', 'pointsCost', 'createdAt']) &&
+                       incoming().keys().hasOnly(['userId', 'source', 'ownerAccountId', 'fetchedByLoginId', 'name', 'title', 'company', 'email', 'phone', 'industry', 'location', 'plateNumber', 'vehicleDetails', 'profileUrl', 'consentGranted', 'pointsCost', 'createdAt']) &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time;
+
+      allow update: if isOwner(userId) &&
+                       isValidId(leadId) &&
+                       existing().source == 'numberplate' &&
+                       isValidLeadRecord(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().source == existing().source &&
+                       incoming().ownerAccountId == existing().ownerAccountId &&
+                       incoming().fetchedByLoginId == existing().fetchedByLoginId &&
+                       incoming().plateNumber == existing().plateNumber &&
+                       incoming().pointsCost == existing().pointsCost &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'email', 'vehicleDetails', 'consentGranted']);
+
+      allow delete: if isOwner(userId) && isValidId(leadId);
+    }
+
+    match /users/{userId}/transactions/{txId} {
+      allow get: if isOwner(userId) && isValidId(txId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(txId) &&
+                       isValidPointTransaction(incoming(), userId) &&
+                       incoming().keys().hasAll(['userId', 'type', 'ownerAccountId', 'loginId', 'counterpartyId', 'amount', 'balanceAfter', 'note', 'createdAt']) &&
+                       incoming().keys().hasOnly(['userId', 'type', 'ownerAccountId', 'loginId', 'counterpartyId', 'amount', 'balanceAfter', 'note', 'createdAt']) &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time;
+
+      allow update: if false;
+      allow delete: if false;
+    }
+  }
+}

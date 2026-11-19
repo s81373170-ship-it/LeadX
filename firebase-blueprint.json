@@ -1,0 +1,98 @@
+{
+  "entities": {
+    "UserSessionProfile": {
+      "title": "UserSessionProfile",
+      "description": "Root user role document stored in /users/{userId} for role-based Owner vs Employee navigation.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID." },
+        "role": { "type": "string", "enum": ["owner", "employee"], "description": "Active role stored in Firestore." },
+        "activeLoginId": { "type": "string", "description": "Active team login ID." },
+        "fullName": { "type": "string", "description": "Display name." },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "role", "activeLoginId", "fullName", "updatedAt"]
+    },
+    "TeamAccount": {
+      "title": "TeamAccount",
+      "description": "An Owner or Employee login account and points wallet within the workspace.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "loginId": { "type": "string" },
+        "passwordHash": { "type": "string" },
+        "fullName": { "type": "string" },
+        "role": { "type": "string", "enum": ["owner", "employee"] },
+        "ownerAccountId": { "type": "string" },
+        "balance": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "loginId", "passwordHash", "fullName", "role", "ownerAccountId", "balance", "createdAt", "updatedAt"]
+    },
+    "LeadRecord": {
+      "title": "LeadRecord",
+      "description": "A fetched lead from LinkedIn capture or Number Plate RC verification.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "source": { "type": "string", "enum": ["linkedin", "numberplate"] },
+        "ownerAccountId": { "type": "string" },
+        "fetchedByLoginId": { "type": "string" },
+        "name": { "type": "string" },
+        "title": { "type": "string" },
+        "company": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "industry": { "type": "string" },
+        "location": { "type": "string" },
+        "plateNumber": { "type": "string" },
+        "vehicleDetails": { "type": "string" },
+        "profileUrl": { "type": "string" },
+        "consentGranted": { "type": "boolean" },
+        "pointsCost": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId", "source", "ownerAccountId", "fetchedByLoginId", "name", "title", "company",
+        "email", "phone", "industry", "location", "plateNumber", "vehicleDetails", "profileUrl",
+        "consentGranted", "pointsCost", "createdAt"
+      ]
+    },
+    "PointTransaction": {
+      "title": "PointTransaction",
+      "description": "Immutable wallet ledger entry for top-ups, ID point sharing, and lead deductions.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["topup", "transfer_in", "transfer_out", "lead_linkedin", "lead_vehicle"] },
+        "ownerAccountId": { "type": "string" },
+        "loginId": { "type": "string" },
+        "counterpartyId": { "type": "string" },
+        "amount": { "type": "integer" },
+        "balanceAfter": { "type": "integer" },
+        "note": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "type", "ownerAccountId", "loginId", "counterpartyId", "amount", "balanceAfter", "note", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserSessionProfile" },
+      "description": "Active user role profile in Firestore for Owner vs Employee dashboard routing."
+    },
+    "/users/{userId}/team_accounts/{accountId}": {
+      "schema": { "$ref": "#/entities/TeamAccount" },
+      "description": "Owner and Employee login accounts and point wallet balances."
+    },
+    "/users/{userId}/leads/{leadId}": {
+      "schema": { "$ref": "#/entities/LeadRecord" },
+      "description": "LinkedIn and Number Plate leads fetched by team accounts."
+    },
+    "/users/{userId}/transactions/{txId}": {
+      "schema": { "$ref": "#/entities/PointTransaction" },
+      "description": "Immutable points wallet ledger entries."
+    }
+  }
+}

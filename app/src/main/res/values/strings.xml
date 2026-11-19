@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">LeadX Pro</string>
+    <string name="nav_dashboard">Dashboard</string>
+    <string name="nav_fetch">Fetch Leads</string>
+    <string name="nav_team">Team &amp; Ledger</string>
+    <string name="cd_app_logo">LeadX Pro emblem</string>
+    <string name="cd_reset_demo">Reset demo data</string>
+    <string name="cd_export_csv">Export leads as CSV</string>
+    <string name="min_balance_rule">Minimum wallet balance must stay at or above 5,000 pts.</string>
+    <string name="autofetch_channel_name">Daily Auto-Fetch Leads</string>
+    <string name="autofetch_channel_desc">Alerts when scheduled daily lead &amp; bio fetching completes.</string>
+    <string name="app_version_format">v%1$s (Code %2$d) · %3$s</string>
+    <string name="app_build_verified_label">Installed Build</string>
+</resources>
