@@ -15,6 +15,7 @@ import {
   parseSalesNavigatorInput,
   saveScrapedLinkedInLeadsToFirestore,
 } from "./linkedin-scraper.js";
+import { renderQrSvg } from "./qr-code.js";
 
 const STORAGE_KEY = "leadx_pro_web_workspace_v1";
 const API_KEYS_STORAGE_KEY = "leadx_pro_web_api_keys_v1";
@@ -878,6 +879,24 @@ function renderDashboard(acc) {
           </div>
         `).join("")}
       </div>
+
+      <div class="card stack">
+        <div class="row-between">
+          <div>
+            <div class="section-label">Android App Distribution · Universal .apk</div>
+            <div style="font-size:15px;font-weight:700;margin-top:4px;">Direct Latest Release Build</div>
+          </div>
+          <span class="pill ok">UNIVERSAL APK</span>
+        </div>
+        <div class="banner" style="font-family:'JetBrains Mono',monospace;font-size:12px;word-break:break-all;">
+          <span>${esc(GITHUB_RELEASE_APK_URL)}</span>
+          <button type="button" class="btn btn-subtle btn-sm" id="dash-copy-apk-url-btn">Copy URL</button>
+        </div>
+        <div class="grid-2">
+          <a class="btn btn-primary" id="dash-download-latest-apk-btn" href="${esc(getApkDownloadUrl())}" download="LeadX-Pro.apk" style="text-decoration:none;">Download Latest APK</a>
+          <button type="button" class="btn btn-outline" id="dash-how-to-install-btn">How to Install (QR + Guide)</button>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -1200,6 +1219,13 @@ function renderHowToInstallModal() {
         <div class="banner warning">
           <span>Why shared APKs look blocked: Android disables <strong>Install from unknown sources</strong> by default for Chrome, Files, and WhatsApp until enabled once.</span>
         </div>
+        <div class="card stack" style="padding:16px;align-items:center;text-align:center;">
+          <div class="section-label">Scan QR Code on Android to Download (.apk)</div>
+          <div style="background:#fff;border:1px solid var(--ink);border-radius:12px;padding:12px;display:inline-flex;">
+            ${renderQrSvg(GITHUB_RELEASE_APK_URL)}
+          </div>
+          <div class="mono" style="font-size:11px;color:var(--graphite);word-break:break-all;">${esc(GITHUB_RELEASE_APK_URL)}</div>
+        </div>
         <div class="card" style="padding:14px;">
           <div class="section-label">Step 01 · Open in Chrome Downloads or Files</div>
           <p style="margin:6px 0 0;font-size:13px;color:var(--graphite);">Open <strong>LeadX-Pro.apk</strong> from Chrome Downloads or your Files app. On Realme, Oppo (ColorOS), or Xiaomi devices, avoid tapping inside WhatsApp directly.</p>
@@ -1416,6 +1442,16 @@ function bindAppEvents() {
     render();
   });
   document.getElementById("dash-export-csv-btn")?.addEventListener("click", () => runSafe(handleExportOwnerCsv));
+  document.getElementById("dash-copy-apk-url-btn")?.addEventListener("click", () =>
+    runSafe(async () => {
+      await navigator.clipboard.writeText(getShareableApkUrl());
+      setBanner("Direct latest APK download URL copied to clipboard.", "success");
+    })
+  );
+  document.getElementById("dash-how-to-install-btn")?.addEventListener("click", () => {
+    state.howToInstallModalOpen = true;
+    render();
+  });
   document.getElementById("team-export-csv-btn")?.addEventListener("click", () => runSafe(handleExportOwnerCsv));
 
   // Top-Up Modal

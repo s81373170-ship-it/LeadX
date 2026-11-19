@@ -397,4 +397,35 @@ class LeadXDomainTest {
     assertFalse(metaStatus.isUniversalApk)
     assertEquals(1, metaStatus.splitCount)
   }
+
+  @Test
+  fun qrCodeMatrix_roundTripsDirectApkDownloadUrlViaZxingDecoder() {
+    val url = com.example.data.ApkShareHelper.DIRECT_APK_DOWNLOAD_URL
+    val qr = com.example.ui.components.encodeQrCodeMatrix(url)
+    assertNotNull(qr)
+    val matrix = qr!!
+    assertTrue(matrix.dimension >= 21)
+
+    val scale = 4
+    val margin = 4 * scale
+    val side = matrix.dimension * scale + margin * 2
+    val pixels = IntArray(side * side) { -1 } // white
+    for (r in 0 until matrix.dimension) {
+      for (c in 0 until matrix.dimension) {
+        if (matrix.isDark(r, c)) {
+          for (dy in 0 until scale) {
+            for (dx in 0 until scale) {
+              val py = margin + r * scale + dy
+              val px = margin + c * scale + dx
+              pixels[py * side + px] = -16777216 // black
+            }
+          }
+        }
+      }
+    }
+    val source = com.google.zxing.RGBLuminanceSource(side, side, pixels)
+    val bitmap = com.google.zxing.BinaryBitmap(com.google.zxing.common.HybridBinarizer(source))
+    val decoded = com.google.zxing.qrcode.QRCodeReader().decode(bitmap)
+    assertEquals(url, decoded.text)
+  }
 }

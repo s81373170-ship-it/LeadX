@@ -13,6 +13,7 @@ import {
   parseSalesNavigatorInput,
   saveScrapedLinkedInLeadsToFirestore,
 } from "./linkedin-scraper.js";
+import { encodeQrMatrix, renderQrSvg } from "./qr-code.js";
 
 test("fetchVehicleDetailsByNumberPlate returns real RTO with 0 pts deducted when SUREPASS_API_TOKEN is empty", async () => {
   const account = { loginId: "OWN1001", ownerAccountId: "OWN1001", balance: 6000 };
@@ -180,4 +181,21 @@ test("chrome background & content scripts include Sales Navigator selectors and 
   assert.ok(bg.includes("chrome.runtime.onMessage.addListener"));
   assert.ok(bg.includes("chrome.scripting.executeScript"));
   assert.ok(bg.includes("/leads"));
+});
+
+test("QR code encoder builds valid Version 5 matrix and crisp SVG for the LeadX-Pro.apk download URL", () => {
+  const url = "https://github.com/s81373170-ship-it/LeadX/releases/latest/download/LeadX-Pro.apk";
+  const encoded = encodeQrMatrix(url);
+  assert.equal(encoded.version, 5);
+  assert.equal(encoded.size, 37);
+  // Top-left 7x7 finder outer corners + center dot must be dark
+  assert.equal(encoded.matrix[0][0], 1);
+  assert.equal(encoded.matrix[0][6], 1);
+  assert.equal(encoded.matrix[6][0], 1);
+  assert.equal(encoded.matrix[3][3], 1);
+  assert.equal(encoded.matrix[1][1], 0);
+  const svg = renderQrSvg(url);
+  assert.ok(svg.startsWith("<svg "));
+  assert.ok(svg.includes("viewBox=\"0 0 41 41\""));
+  assert.ok(svg.includes("<rect "));
 });

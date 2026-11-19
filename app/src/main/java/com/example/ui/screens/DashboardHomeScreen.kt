@@ -25,10 +25,12 @@ import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.AddCard
 import androidx.compose.material.icons.rounded.AutoMode
 import androidx.compose.material.icons.rounded.Badge
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.WarningAmber
@@ -122,6 +124,8 @@ fun DashboardHomeScreen(
   onExportOwnerCsv: () -> Unit,
   onOpenShareApk: () -> Unit = {},
   onOpenHowToInstall: () -> Unit = {},
+  onDownloadLatestApk: () -> Unit = {},
+  onCopyDirectApkUrl: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   var showTopUpSheet by rememberSaveable { mutableStateOf(false) }
@@ -629,6 +633,50 @@ fun DashboardHomeScreen(
             )
           }
           Spacer(Modifier.height(10.dp))
+          Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = SoftAlabaster,
+            border = BorderStroke(1.dp, HairlineBorder),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+              Text(
+                text = com.example.data.ApkShareHelper.DIRECT_APK_DOWNLOAD_URL,
+                fontFamily = MonoFontFamily,
+                style = MaterialTheme.typography.labelSmall,
+                color = InkBlack,
+                modifier = Modifier.weight(1f).testTag("dashboard_direct_apk_url_text"),
+              )
+              androidx.compose.material3.IconButton(
+                onClick = onCopyDirectApkUrl,
+                modifier = Modifier.minimumInteractiveComponentSize().testTag("dashboard_copy_apk_url_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Rounded.ContentCopy,
+                  contentDescription = "Copy latest APK download URL",
+                  tint = InkBlack,
+                  modifier = Modifier.size(16.dp),
+                )
+              }
+            }
+          }
+          Spacer(Modifier.height(10.dp))
+          Button(
+            onClick = onDownloadLatestApk,
+            enabled = !isBusy,
+            colors = ButtonDefaults.buttonColors(containerColor = InkBlack, contentColor = PureWhite),
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.fillMaxWidth().height(50.dp).testTag("dashboard_download_latest_apk_button"),
+          ) {
+            Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Download Latest APK", fontWeight = FontWeight.Bold)
+          }
+          Spacer(Modifier.height(8.dp))
           androidx.compose.material3.OutlinedButton(
             onClick = onOpenShareApk,
             enabled = !isBusy,
@@ -640,13 +688,15 @@ fun DashboardHomeScreen(
             Spacer(Modifier.width(8.dp))
             Text("Share Installable App (.apk) / Link", color = InkBlack, fontWeight = FontWeight.Bold)
           }
-          Spacer(Modifier.height(6.dp))
+          Spacer(Modifier.height(4.dp))
           TextButton(
             onClick = onOpenHowToInstall,
             enabled = !isBusy,
             modifier = Modifier.fillMaxWidth().height(48.dp).testTag("dashboard_how_to_install_button"),
           ) {
-            Text("How to Install (.apk Unknown Sources Guide)", color = InkGraphite, fontWeight = FontWeight.SemiBold)
+            Icon(Icons.Rounded.QrCode2, contentDescription = null, tint = InkGraphite, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("How to Install (.apk QR & Unknown Sources)", color = InkGraphite, fontWeight = FontWeight.SemiBold)
           }
         }
       }

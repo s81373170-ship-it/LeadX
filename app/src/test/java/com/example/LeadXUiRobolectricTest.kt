@@ -35,6 +35,10 @@ class LeadXUiRobolectricTest {
     composeRule.waitUntil(timeoutMillis = 5_000) {
       composeRule.onAllNodesWithTag("how_to_install_modal").fetchSemanticsNodes().isNotEmpty()
     }
+    composeRule.onNodeWithTag("apk_download_qr_card").performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithTag("apk_download_qr_code").assertIsDisplayed()
+    composeRule.onNodeWithTag("qr_copy_link_button").assertIsDisplayed()
+    composeRule.onNodeWithTag("modal_download_latest_apk_button").performScrollTo().assertIsDisplayed()
     composeRule.onNodeWithTag("open_unknown_sources_settings_button").performScrollTo().assertIsDisplayed()
     composeRule.onNodeWithTag("copy_install_guide_button").performScrollTo().assertIsDisplayed().performClick()
     composeRule.waitUntil(timeoutMillis = 5_000) {
@@ -57,15 +61,19 @@ class LeadXUiRobolectricTest {
     composeRule.onNodeWithTag("quick_fill_owner").performScrollTo().assertIsDisplayed().performClick()
     composeRule.onNodeWithTag("login_submit_button").performScrollTo().assertIsDisplayed().performClick()
 
-    // 2. Owner Dashboard renders, How to Install & Share APK sheets work from Dashboard, & Top-Up Modal updates balance
+    // 2. Owner Dashboard renders, Download Latest APK, How to Install QR & Share APK sheets work from Dashboard, & Top-Up Modal updates balance
     composeRule.waitUntil(timeoutMillis = 10_000) {
       composeRule.onAllNodesWithTag("wallet_balance_text").fetchSemanticsNodes().isNotEmpty()
     }
     composeRule.onNodeWithTag("wallet_balance_text").assertIsDisplayed()
+    composeRule.onNodeWithTag("dashboard_direct_apk_url_text").performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithTag("dashboard_copy_apk_url_button").assertIsDisplayed().performClick()
+    composeRule.onNodeWithTag("dashboard_download_latest_apk_button").performScrollTo().assertIsDisplayed()
     composeRule.onNodeWithTag("dashboard_how_to_install_button").performScrollTo().assertIsDisplayed().performClick()
     composeRule.waitUntil(timeoutMillis = 5_000) {
       composeRule.onAllNodesWithTag("how_to_install_modal").fetchSemanticsNodes().isNotEmpty()
     }
+    composeRule.onNodeWithTag("apk_download_qr_code").assertIsDisplayed()
     composeRule.onNodeWithTag("close_how_to_install_button").performClick()
     composeRule.waitUntil(timeoutMillis = 5_000) {
       composeRule.onAllNodesWithTag("how_to_install_modal").fetchSemanticsNodes().isEmpty()

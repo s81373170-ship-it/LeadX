@@ -131,6 +131,38 @@ fun HowToInstallModal(
         }
       }
 
+      Spacer(Modifier.height(12.dp))
+
+      ApkDownloadQrCard(
+        url = ApkShareHelper.DIRECT_APK_DOWNLOAD_URL,
+        onCopyUrl = {
+          if (ApkShareHelper.copyDownloadLink(context)) {
+            onFeedback("Direct APK download link copied to clipboard.", false)
+          } else {
+            onFeedback("Clipboard unavailable on this device.", true)
+          }
+        },
+      )
+
+      Spacer(Modifier.height(10.dp))
+
+      OutlinedButton(
+        onClick = {
+          val opened = ApkShareHelper.openUrlInBrowser(context, ApkShareHelper.DIRECT_APK_DOWNLOAD_URL)
+          if (!opened) {
+            ApkShareHelper.copyDownloadLink(context)
+            onFeedback("No browser found — direct APK link copied to clipboard.", false)
+          }
+        },
+        border = BorderStroke(1.dp, InkBlack),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("modal_download_latest_apk_button"),
+      ) {
+        Icon(Icons.Rounded.Download, contentDescription = null, tint = InkBlack, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("Download Latest APK in Chrome", color = InkBlack, fontWeight = FontWeight.Bold)
+      }
+
       Spacer(Modifier.height(14.dp))
 
       InstallStepCard(

@@ -38,10 +38,9 @@ jobs:
           printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n84831b9409646a918e30573bab4c9c91346d8abd\nd56f5187479451eabf01fb78af6dfcb131a6481e\n" > "$SDK_ROOT/licenses/android-sdk-license"
           printf "\n84831b9409646a918e30573bab4c9c91346d8abd\n" > "$SDK_ROOT/licenses/android-sdk-preview-license"
           printf "\nd975f751698a77b662f1254ddbeed3901e976f5a\n" > "$SDK_ROOT/licenses/intel-android-extra-license"
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager --install "platform-tools" "build-tools;36.0.0" "platforms;android-36.1" "platforms;android-36" || \
-            sdkmanager --install "platform-tools" "build-tools;36.0.0" "platforms;android-36.1" || \
-            sdkmanager --install "platform-tools" "build-tools;36.0.0" "platforms;android-36"
+          yes | sdkmanager --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
+          sdkmanager --sdk_root="$SDK_ROOT" --install "platform-tools" "build-tools;36.0.0" "platforms;android-36"
+          sdkmanager --sdk_root="$SDK_ROOT" --install "platforms;android-36.1" || true
 
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
@@ -136,7 +135,6 @@ jobs:
     name: Deploy Shareable Web & APK Portal (GitHub Pages)
     needs: build-apk
     if: success() && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch')
-    continue-on-error: true
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -159,13 +157,20 @@ jobs:
           cp _apk_dist/LeadX-Pro-debug.apk _site/LeadX-Pro-debug.apk
 
       - name: Configure GitHub Pages
+        id: configure_pages
+        continue-on-error: true
         uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
+        id: upload_pages
+        if: steps.configure_pages.outcome == 'success'
+        continue-on-error: true
         uses: actions/upload-pages-artifact@v3
         with:
           path: _site
 
       - name: Deploy to GitHub Pages
         id: deployment
+        if: steps.upload_pages.outcome == 'success'
+        continue-on-error: true
         uses: actions/deploy-pages@v4

@@ -144,6 +144,7 @@ dependencies {
   // implementation(libs.moshi.kotlin)
   implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.okhttp)
+  implementation(libs.zxing.core)
   // implementation(libs.play.services.location)
   // implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)

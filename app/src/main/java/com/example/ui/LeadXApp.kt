@@ -77,6 +77,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.R
 import com.example.auth.GoogleAuthHelper
+import com.example.data.ApkShareHelper
 import com.example.data.CsvExporter
 import com.example.data.RealLeadExtractor
 import com.example.model.AccountRole
@@ -241,6 +242,28 @@ private fun RoleNavigatedWorkspace(
     scope.launch {
       GoogleAuthHelper.signOut(context)
       viewModel.showFlash("Disconnected Google Cloud Sync. Switched to Local Room DB.")
+    }
+  }
+
+  val downloadLatestApk: () -> Unit = {
+    val opened = ApkShareHelper.openUrlInBrowser(context, ApkShareHelper.DIRECT_APK_DOWNLOAD_URL)
+    if (!opened) {
+      val copied = ApkShareHelper.copyDownloadLink(context)
+      viewModel.showFlash(
+        if (copied) "No browser found — direct APK link copied to clipboard."
+        else "Could not open browser. Visit Releases for LeadX-Pro.apk.",
+        isError = !copied,
+      )
+    } else {
+      viewModel.showFlash("Opening direct LeadX-Pro.apk download in Chrome.")
+    }
+  }
+
+  val copyDirectApkUrl: () -> Unit = {
+    if (ApkShareHelper.copyDownloadLink(context)) {
+      viewModel.showFlash("Direct LeadX-Pro.apk URL copied to clipboard.")
+    } else {
+      viewModel.showFlash("Clipboard unavailable on this device.", isError = true)
     }
   }
 
@@ -527,6 +550,8 @@ private fun RoleNavigatedWorkspace(
           onOpenApiKeys = { showApiKeysSheet = true },
           onOpenShareApk = { showShareApkSheet = true },
           onOpenHowToInstall = { showHowToInstallModal = true },
+          onDownloadLatestApk = downloadLatestApk,
+          onCopyDirectApkUrl = copyDirectApkUrl,
         )
       } else {
         Box(Modifier.fillMaxSize().background(PaperBackground), contentAlignment = Alignment.Center) {
@@ -592,6 +617,8 @@ private fun RoleNavigatedWorkspace(
           onOpenApiKeys = { showApiKeysSheet = true },
           onOpenShareApk = { showShareApkSheet = true },
           onOpenHowToInstall = { showHowToInstallModal = true },
+          onDownloadLatestApk = downloadLatestApk,
+          onCopyDirectApkUrl = copyDirectApkUrl,
         )
       } else {
         Box(Modifier.fillMaxSize().background(PaperBackground), contentAlignment = Alignment.Center) {
@@ -627,6 +654,8 @@ private fun RoleDashboardShell(
   onOpenApiKeys: () -> Unit,
   onOpenShareApk: () -> Unit,
   onOpenHowToInstall: () -> Unit,
+  onDownloadLatestApk: () -> Unit,
+  onCopyDirectApkUrl: () -> Unit,
 ) {
   BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
     val useRail = maxWidth >= 700.dp
@@ -726,6 +755,8 @@ private fun RoleDashboardShell(
               onExportOwnerCsv = onExportOwnerCsv,
               onOpenShareApk = onOpenShareApk,
               onOpenHowToInstall = onOpenHowToInstall,
+              onDownloadLatestApk = onDownloadLatestApk,
+              onCopyDirectApkUrl = onCopyDirectApkUrl,
             )
           AppTab.FETCH -> {
             val scopedLeads =
