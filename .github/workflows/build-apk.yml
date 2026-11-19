@@ -29,33 +29,60 @@ jobs:
           java-version: "21"
 
       - name: Set up Android SDK & required API 36.1 platform
+        continue-on-error: true
         uses: android-actions/setup-android@v3
 
       - name: Accept Android SDK licenses & install compileSdk 36.1 + build-tools
         run: |
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ ! -w "$SDK_ROOT" ] && command -v sudo >/dev/null 2>&1; then
+            sudo mkdir -p "$SDK_ROOT"
+            sudo chown -R "$(id -u):$(id -g)" "$SDK_ROOT"
+          fi
           export ANDROID_HOME="$SDK_ROOT"
           export ANDROID_SDK_ROOT="$SDK_ROOT"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
           mkdir -p "$SDK_ROOT/licenses"
           printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n84831b9409646a918e30573bab4c9c91346d8abd\nd56f5187479451eabf01fb78af6dfcb131a6481e\n" > "$SDK_ROOT/licenses/android-sdk-license"
           printf "\n84831b9409646a918e30573bab4c9c91346d8abd\n" > "$SDK_ROOT/licenses/android-sdk-preview-license"
           printf "\nd975f751698a77b662f1254ddbeed3901e976f5a\n" > "$SDK_ROOT/licenses/intel-android-extra-license"
-          yes | sdkmanager --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
-          echo "Available Android 36 SDK packages:"
-          sdkmanager --sdk_root="$SDK_ROOT" --list 2>/dev/null | grep -E "platforms;android-36|build-tools;36" || true
-          sdkmanager --sdk_root="$SDK_ROOT" --install "platform-tools" "build-tools;36.0.0" "platforms;android-36"
-          EXTRA_36_PKG="$(sdkmanager --sdk_root="$SDK_ROOT" --list 2>/dev/null | grep -oE 'platforms;android-36[^ |]*' | grep -v '^platforms;android-36$' | sort -V | tail -n 1 || true)"
-          if [ -n "$EXTRA_36_PKG" ]; then
-            echo "Installing minor platform package: $EXTRA_36_PKG"
-            sdkmanager --sdk_root="$SDK_ROOT" --install "$EXTRA_36_PKG" || true
-          else
-            sdkmanager --sdk_root="$SDK_ROOT" --install "platforms;android-36.1" || true
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ] && [ -d "$SDK_ROOT" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT" -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1 || true)"
+          fi
+          echo "Using sdkmanager: ${SDKMANAGER:-not found}"
+          if [ -n "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
+            "$SDKMANAGER" --sdk_root="$SDK_ROOT" --list 2>/dev/null | grep -E "platforms;android-36|build-tools;36" || true
+            "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platform-tools" "build-tools;36.0.0" "platforms;android-36" || true
+            EXTRA_36_PKG="$("$SDKMANAGER" --sdk_root="$SDK_ROOT" --list 2>/dev/null | grep -oE 'platforms;android-36[^ |]*' | grep -v '^platforms;android-36$' | sort -V | tail -n 1 || true)"
+            if [ -n "$EXTRA_36_PKG" ]; then
+              echo "Installing minor platform package: $EXTRA_36_PKG"
+              "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "$EXTRA_36_PKG" || true
+            else
+              "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platforms;android-36.1" || true
+            fi
           fi
 
       - name: Set up Gradle 9.3.1
+        continue-on-error: true
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.3.1"
+
+      - name: Ensure Gradle 9.3.1 is on PATH
+        run: |
+          if ! command -v gradle >/dev/null 2>&1 || ! gradle --version | grep -q "9.3.1"; then
+            echo "Downloading Gradle 9.3.1 directly..."
+            curl -fsSL "https://services.gradle.org/distributions/gradle-9.3.1-bin.zip" -o /tmp/gradle-9.3.1-bin.zip
+            mkdir -p "$HOME/.gradle-dist"
+            unzip -q -o /tmp/gradle-9.3.1-bin.zip -d "$HOME/.gradle-dist"
+            echo "$HOME/.gradle-dist/gradle-9.3.1/bin" >> "$GITHUB_PATH"
+            "$HOME/.gradle-dist/gradle-9.3.1/bin/gradle" --version
+          else
+            gradle --version
+          fi
 
       - name: Restore or generate debug keystore
         run: |
@@ -95,7 +122,10 @@ jobs:
           fi
           unzip -t "$APK_PATH" >/dev/null
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-          APKSIGNER="$(find "$SDK_ROOT/build-tools" -name apksigner 2>/dev/null | sort -V | tail -n 1)"
+          APKSIGNER=""
+          if [ -d "$SDK_ROOT/build-tools" ]; then
+            APKSIGNER="$(find "$SDK_ROOT/build-tools" -type f -name apksigner 2>/dev/null | sort -V | tail -n 1 || true)"
+          fi
           if [ -n "$APKSIGNER" ]; then
             "$APKSIGNER" verify --verbose "$APK_PATH"
           fi
