@@ -368,3 +368,20 @@ private fun DemoCredentialChip(
     }
   }
 }
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, showSystemUi = true, name = "Auth Login Screen")
+@Composable
+private fun AuthLoginScreenPreview() {
+  com.example.ui.theme.LeadXTheme {
+    AuthLoginScreen(
+      flashBanner = null,
+      isBusy = false,
+      googleUserEmail = null,
+      onSignIn = { _, _ -> },
+      onRegisterOwner = { _, _, _ -> },
+      onConnectGoogle = {},
+      onSignOutGoogle = {},
+      onDismissFlash = {},
+    )
+  }
+}

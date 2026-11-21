@@ -207,10 +207,10 @@ object RealLeadExtractor {
   fun isProxycurlConfigured(): Boolean = currentProxycurlKey().isNotEmpty()
 
   /**
-   * Fetches real LinkedIn profile details via:
-   * 1) Official Proxycurl B2B API if PROXYCURL_API_KEY is configured in Secrets.
-   * 2) Direct public LinkedIn HTTP OpenGraph/JSON-LD extraction.
-   * 3) Live public search index lookup (DuckDuckGo HTML snippet of the exact LinkedIn URL).
+   * Fetches real LinkedIn profile details completely WITHOUT requiring an API key:
+   * 1) Direct public LinkedIn HTTP JSON-LD + OpenGraph/meta extraction.
+   * 2) Live public web search index lookup (DuckDuckGo & Bing HTML snippets for the exact LinkedIn URL).
+   * 3) Optional Proxycurl API only if the user explicitly configured a key.
    * Never generates synthetic emails, phone numbers, or fake people.
    */
   fun fetchRealLinkedInProfile(rawUrl: String): Result<LinkedInCandidate> {
@@ -221,28 +221,36 @@ object RealLeadExtractor {
     val normalizedUrl =
       if (trimmed.startsWith("http", ignoreCase = true)) trimmed else "https://$trimmed"
 
-    // 1. Proxycurl API (when user configures PROXYCURL_API_KEY in AI Studio Secrets)
+    // 1. Direct Public LinkedIn JSON-LD / OpenGraph / meta (No API key)
+    val directCandidate = fetchDirectLinkedInHtml(normalizedUrl)
+    if (directCandidate != null) return Result.success(directCandidate)
+
+    // 2. Live public web search index lookup (No API key)
+    val searchCandidate = fetchFromLiveWebIndex(normalizedUrl)
+    if (searchCandidate != null) return Result.success(searchCandidate)
+
+    // 3. Optional Proxycurl API if user explicitly configured one
     if (isProxycurlConfigured()) {
       val proxycurlResult = fetchFromProxycurl(normalizedUrl)
       if (proxycurlResult != null) return Result.success(proxycurlResult)
     }
 
-    // 2. Direct Public LinkedIn OpenGraph / JSON-LD metadata
-    val directCandidate = fetchDirectLinkedInHtml(normalizedUrl)
-    if (directCandidate != null) return Result.success(directCandidate)
-
-    // 3. Live DuckDuckGo HTML search lookup for the exact public LinkedIn profile
-    val searchCandidate = fetchFromLiveWebIndex(normalizedUrl)
-    if (searchCandidate != null) return Result.success(searchCandidate)
-
     return Result.failure(
       IllegalStateException(
-        "Could not fetch live LinkedIn profile publicly (LinkedIn blocks anonymous bots). Tap 'Open LinkedIn & Capture DOM' below to sign in inside the browser and extract real visible leads."
+        "LinkedIn blocked anonymous public fetch for this exact URL. Open 'DOM & JSON' -> 'LinkedIn DOM' to browse & auto-capture full profile details directly without any API."
       )
     )
   }
 
-  fun searchB2BLeadsViaProxycurl(query: LinkedInSearchQuery): Result<List<LinkedInCandidate>> {
+  /**
+   * Searches real LinkedIn B2B profiles WITHOUT requiring any API key (uses live public web
+   * index queries + public LinkedIn profile metadata enrichment). Falls back to Proxycurl only
+   * if the user explicitly configured an optional Proxycurl key.
+   */
+  fun searchB2BLeadsViaProxycurl(query: LinkedInSearchQuery): Result<List<LinkedInCandidate>> =
+    searchLinkedInNoApi(query)
+
+  fun searchLinkedInNoApi(query: LinkedInSearchQuery): Result<List<LinkedInCandidate>> {
     val role = query.roleTitle.trim()
     val company = query.companyName.trim()
     val industry = query.industry.trim()
@@ -252,63 +260,271 @@ object RealLeadExtractor {
         IllegalArgumentException("Enter at least one B2B search filter (Role Title, Company, Industry, or City).")
       )
     }
-    val apiKey = currentProxycurlKey()
-    if (apiKey.isBlank()) {
-      return Result.failure(
-        IllegalStateException("Proxycurl API Key required for B2B Person Search. Tap API Keys to add your PROXYCURL_API_KEY.")
-      )
+
+    // 1. Primary: API-free live web index discovery (site:linkedin.com/in)
+    val noApiResults = mutableListOf<LinkedInCandidate>()
+    val searchQuery = buildLinkedInWebQuery(query)
+    val ddgMatches = queryDuckDuckGoLinkedIn(searchQuery, query)
+    noApiResults.addAll(ddgMatches)
+
+    if (noApiResults.size < query.pageSize) {
+      val bingMatches = queryBingLinkedIn(searchQuery, query)
+      noApiResults.addAll(bingMatches)
     }
 
+    val deduped =
+      noApiResults
+        .distinctBy { it.profileUrl.substringBefore("?").trimEnd('/').lowercase() }
+        .take(query.pageSize.coerceIn(1, 20))
+        .map { candidate ->
+          if (candidate.bio.isBlank() && candidate.profileUrl.contains("linkedin.com/in/", ignoreCase = true)) {
+            val enriched = fetchDirectLinkedInHtml(candidate.profileUrl)
+            if (enriched != null) {
+              candidate.copy(
+                title = enriched.title.ifBlank { candidate.title },
+                company = enriched.company.ifBlank { candidate.company },
+                location = enriched.location.ifBlank { candidate.location },
+                email = enriched.email.ifBlank { candidate.email },
+                phone = enriched.phone.ifBlank { candidate.phone },
+                bio = enriched.bio.ifBlank { candidate.bio },
+              )
+            } else {
+              candidate
+            }
+          } else {
+            candidate
+          }
+        }
+
+    if (deduped.isNotEmpty()) {
+      return Result.success(deduped)
+    }
+
+    // 2. Optional Proxycurl fallback only if user explicitly configured an API key
+    val apiKey = currentProxycurlKey()
+    if (apiKey.isNotBlank()) {
+      return try {
+        val country = query.countryCode.trim().uppercase().ifBlank { "IN" }.take(2)
+        val urlBuilder =
+          okhttp3.HttpUrl.Builder()
+            .scheme("https")
+            .host("nubela.co")
+            .addPathSegments("proxycurl/api/v2/search/person")
+            .addQueryParameter("country", country)
+            .addQueryParameter("enrich_profiles", "enrich")
+            .addQueryParameter("page_size", query.pageSize.coerceIn(1, 20).toString())
+
+        if (role.isNotBlank()) urlBuilder.addQueryParameter("current_role_title", role)
+        if (company.isNotBlank()) urlBuilder.addQueryParameter("current_company_name", company)
+        if (industry.isNotBlank()) urlBuilder.addQueryParameter("industries", industry)
+        if (city.isNotBlank()) urlBuilder.addQueryParameter("city", city)
+
+        val req =
+          Request.Builder()
+            .url(urlBuilder.build())
+            .header("Authorization", "Bearer $apiKey")
+            .get()
+            .build()
+
+        httpClient.newCall(req).execute().use { resp ->
+          val bodyStr = resp.body?.string().orEmpty()
+          if (resp.isSuccessful) {
+            val candidates = parseProxycurlSearchResponse(bodyStr)
+            if (candidates.isNotEmpty()) return Result.success(candidates)
+          }
+        }
+        Result.failure(
+          IllegalStateException(
+            "No public LinkedIn profiles matched right now. Open 'DOM & JSON' -> 'LinkedIn DOM' to search directly inside LinkedIn without any API."
+          )
+        )
+      } catch (e: Exception) {
+        Result.failure(
+          IllegalStateException("LinkedIn search could not reach web index (${e.message ?: "network error"}). Try 'DOM & JSON' in-app browser.")
+        )
+      }
+    }
+
+    return Result.failure(
+      IllegalStateException(
+        "No public LinkedIn profiles returned right now (rate-limited or offline). Open 'DOM & JSON' -> 'LinkedIn DOM' to capture directly from LinkedIn without any API."
+      )
+    )
+  }
+
+  fun buildLinkedInWebQuery(query: LinkedInSearchQuery): String {
+    val countryName =
+      when (query.countryCode.trim().uppercase()) {
+        "IN" -> "India"
+        "US" -> "United States"
+        "GB" -> "United Kingdom"
+        "SG" -> "Singapore"
+        "AE" -> "UAE"
+        else -> query.countryCode.trim()
+      }
+    return buildList {
+      add("site:linkedin.com/in")
+      if (query.roleTitle.isNotBlank()) add("\"${query.roleTitle.trim()}\"")
+      if (query.companyName.isNotBlank()) add("\"${query.companyName.trim()}\"")
+      if (query.industry.isNotBlank()) add(query.industry.trim())
+      if (query.city.isNotBlank()) add(query.city.trim())
+      if (countryName.isNotBlank()) add(countryName)
+    }.joinToString(" ")
+  }
+
+  private fun queryDuckDuckGoLinkedIn(searchQuery: String, filters: LinkedInSearchQuery): List<LinkedInCandidate> {
     return try {
-      val country = query.countryCode.trim().uppercase().ifBlank { "IN" }.take(2)
-      val urlBuilder =
-        okhttp3.HttpUrl.Builder()
-          .scheme("https")
-          .host("nubela.co")
-          .addPathSegments("proxycurl/api/v2/search/person")
-          .addQueryParameter("country", country)
-          .addQueryParameter("enrich_profiles", "enrich")
-          .addQueryParameter("page_size", query.pageSize.coerceIn(1, 20).toString())
-
-      if (role.isNotBlank()) urlBuilder.addQueryParameter("current_role_title", role)
-      if (company.isNotBlank()) urlBuilder.addQueryParameter("current_company_name", company)
-      if (industry.isNotBlank()) urlBuilder.addQueryParameter("industries", industry)
-      if (city.isNotBlank()) urlBuilder.addQueryParameter("city", city)
-
+      val encodedQuery = URLEncoder.encode(searchQuery, "UTF-8")
       val req =
         Request.Builder()
-          .url(urlBuilder.build())
-          .header("Authorization", "Bearer $apiKey")
+          .url("https://html.duckduckgo.com/html/?q=$encodedQuery")
+          .header(
+            "User-Agent",
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36",
+          )
+          .header("Accept-Language", "en-US,en;q=0.9")
           .get()
           .build()
-
       httpClient.newCall(req).execute().use { resp ->
-        val bodyStr = resp.body?.string().orEmpty()
-        if (!resp.isSuccessful) {
-          val apiMsg =
-            runCatching {
-                val errJson = JSONObject(bodyStr)
-                errJson.optString("description").ifBlank { errJson.optString("message") }
-              }
-              .getOrNull()
-              .orEmpty()
-              .ifBlank { "Proxycurl B2B Search error (HTTP ${resp.code})." }
-          return Result.failure(IllegalStateException(apiMsg))
-        }
-        val candidates = parseProxycurlSearchResponse(bodyStr)
-        if (candidates.isEmpty()) {
-          Result.failure(
-            IllegalStateException("No matching B2B LinkedIn profiles found for those filters.")
-          )
-        } else {
-          Result.success(candidates)
-        }
+        if (!resp.isSuccessful) return emptyList()
+        val html = resp.body?.string()?.take(200_000) ?: return emptyList()
+        parseDuckDuckGoLinkedInResults(html, filters)
       }
-    } catch (e: Exception) {
-      Result.failure(
-        IllegalStateException("Proxycurl B2B Search failed: ${e.message ?: "network error"}")
-      )
+    } catch (_: Exception) {
+      emptyList()
     }
+  }
+
+  fun parseDuckDuckGoLinkedInResults(
+    html: String,
+    filters: LinkedInSearchQuery = LinkedInSearchQuery(),
+  ): List<LinkedInCandidate> {
+    if (html.isBlank()) return emptyList()
+    val blockRegex =
+      Regex(
+        """<div[^>]+class="[^"]*result\b[^"]*"[^>]*>(.*?)</div>\s*(?=<div[^>]+class="[^"]*result\b|$)""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+      )
+    val titleAnchorRegex =
+      Regex(
+        """<a[^>]+class="[^"]*result__a[^"]*"[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+      )
+    val snippetRegex =
+      Regex(
+        """<(?:a|div)[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</(?:a|div)>""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+      )
+
+    val out = mutableListOf<LinkedInCandidate>()
+    val blocks = blockRegex.findAll(html).toList()
+    if (blocks.isNotEmpty()) {
+      for (block in blocks) {
+        val content = block.groupValues[1]
+        val anchor = titleAnchorRegex.find(content) ?: continue
+        val resolvedUrl = resolveDuckDuckGoRedirectUrl(anchor.groupValues[1])
+        if (!resolvedUrl.contains("linkedin.com/in/", ignoreCase = true)) continue
+        val title = stripHtml(anchor.groupValues[2])
+        val snippet = stripHtml(snippetRegex.find(content)?.groupValues?.getOrNull(1).orEmpty())
+        val parsed =
+          parseRealTitleAndSnippet(
+            profileUrl = resolvedUrl,
+            rawTitle = title,
+            rawSnippet = snippet,
+            captureMethod = "No-API LinkedIn Index",
+            fallbackIndustry = filters.industry.trim(),
+            fallbackLocation = filters.city.trim(),
+          )
+        if (parsed != null) out.add(parsed)
+      }
+    } else {
+      val anchors = titleAnchorRegex.findAll(html).toList()
+      val snippets = snippetRegex.findAll(html).toList()
+      anchors.forEachIndexed { idx, anchor ->
+        val resolvedUrl = resolveDuckDuckGoRedirectUrl(anchor.groupValues[1])
+        if (!resolvedUrl.contains("linkedin.com/in/", ignoreCase = true)) return@forEachIndexed
+        val title = stripHtml(anchor.groupValues[2])
+        val snippet = stripHtml(snippets.getOrNull(idx)?.groupValues?.getOrNull(1).orEmpty())
+        val parsed =
+          parseRealTitleAndSnippet(
+            profileUrl = resolvedUrl,
+            rawTitle = title,
+            rawSnippet = snippet,
+            captureMethod = "No-API LinkedIn Index",
+            fallbackIndustry = filters.industry.trim(),
+            fallbackLocation = filters.city.trim(),
+          )
+        if (parsed != null) out.add(parsed)
+      }
+    }
+    return out
+  }
+
+  private fun queryBingLinkedIn(searchQuery: String, filters: LinkedInSearchQuery): List<LinkedInCandidate> {
+    return try {
+      val encodedQuery = URLEncoder.encode(searchQuery, "UTF-8")
+      val req =
+        Request.Builder()
+          .url("https://www.bing.com/search?q=$encodedQuery&count=15")
+          .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+          )
+          .header("Accept-Language", "en-US,en;q=0.9")
+          .get()
+          .build()
+      httpClient.newCall(req).execute().use { resp ->
+        if (!resp.isSuccessful) return emptyList()
+        val html = resp.body?.string()?.take(200_000) ?: return emptyList()
+        parseBingLinkedInResults(html, filters)
+      }
+    } catch (_: Exception) {
+      emptyList()
+    }
+  }
+
+  fun parseBingLinkedInResults(
+    html: String,
+    filters: LinkedInSearchQuery = LinkedInSearchQuery(),
+  ): List<LinkedInCandidate> {
+    if (html.isBlank()) return emptyList()
+    val algoRegex =
+      Regex("""<li[^>]+class="[^"]*b_algo[^"]*"[^>]*>(.*?)</li>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+    val linkRegex =
+      Regex("""<h2[^>]*>\s*<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+    val snippetRegex =
+      Regex("""<p[^>]*>(.*?)</p>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+
+    return algoRegex.findAll(html).mapNotNull { match ->
+      val block = match.groupValues[1]
+      val anchor = linkRegex.find(block) ?: return@mapNotNull null
+      val url = anchor.groupValues[1].trim()
+      if (!url.contains("linkedin.com/in/", ignoreCase = true)) return@mapNotNull null
+      val title = stripHtml(anchor.groupValues[2])
+      val snippet = stripHtml(snippetRegex.find(block)?.groupValues?.getOrNull(1).orEmpty())
+      parseRealTitleAndSnippet(
+        profileUrl = url.substringBefore("?"),
+        rawTitle = title,
+        rawSnippet = snippet,
+        captureMethod = "No-API LinkedIn Index",
+        fallbackIndustry = filters.industry.trim(),
+        fallbackLocation = filters.city.trim(),
+      )
+    }.toList()
+  }
+
+  private fun resolveDuckDuckGoRedirectUrl(rawHref: String): String {
+    val unescaped = rawHref.replace("&amp;", "&").trim()
+    val uddg = Regex("""[?&]uddg=([^&]+)""").find(unescaped)?.groupValues?.getOrNull(1)
+    val decoded =
+      if (!uddg.isNullOrBlank()) {
+        runCatching { java.net.URLDecoder.decode(uddg, "UTF-8") }.getOrDefault(unescaped)
+      } else if (unescaped.startsWith("//")) {
+        "https:$unescaped"
+      } else {
+        unescaped
+      }
+    return decoded.substringBefore("?").trim()
   }
 
   fun parseProxycurlSearchResponse(rawJson: String): List<LinkedInCandidate> {
@@ -451,44 +667,131 @@ object RealLeadExtractor {
           .url(profileUrl)
           .header(
             "User-Agent",
-            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36",
           )
           .header("Accept-Language", "en-US,en;q=0.9")
           .get()
           .build()
       httpClient.newCall(req).execute().use { resp ->
         if (!resp.isSuccessful) return null
-        val html = resp.body?.string()?.take(65536) ?: return null
+        val html = resp.body?.string()?.take(98304) ?: return null
+        val jsonLdCandidate = parseLinkedInJsonLd(profileUrl, html)
+        if (jsonLdCandidate != null) return jsonLdCandidate
         val ogTitle = extractMetaContent(html, "og:title").ifBlank { extractHtmlTitle(html) }
         val ogDesc = extractMetaContent(html, "og:description").ifBlank { extractMetaContent(html, "description") }
-        parseRealTitleAndSnippet(profileUrl, ogTitle, ogDesc, "Live LinkedIn Public Meta")
+        parseRealTitleAndSnippet(profileUrl, ogTitle, ogDesc, "No-API LinkedIn Public Meta")
       }
     } catch (_: Exception) {
       null
     }
   }
 
+  fun parseLinkedInJsonLd(profileUrl: String, html: String): LinkedInCandidate? {
+    val scriptRegex =
+      Regex("""<script[^>]+type=["']application/ld\+json["'][^>]*>(.*?)</script>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+    for (match in scriptRegex.findAll(html)) {
+      val raw = match.groupValues[1].trim()
+      if (raw.isBlank()) continue
+      val obj = runCatching { JSONObject(raw) }.getOrNull() ?: continue
+      val candidates = mutableListOf<JSONObject>()
+      if (obj.optString("@type").equals("Person", ignoreCase = true)) {
+        candidates.add(obj)
+      }
+      obj.optJSONObject("mainEntity")?.let { candidates.add(it) }
+      obj.optJSONArray("@graph")?.let { graph ->
+        for (i in 0 until graph.length()) {
+          graph.optJSONObject(i)?.let { candidates.add(it) }
+        }
+      }
+      val person =
+        candidates.firstOrNull {
+          it.optString("@type").equals("Person", ignoreCase = true) && it.optString("name").isNotBlank()
+        } ?: continue
+      val name = person.optString("name").trim()
+      if (name.isBlank()) continue
+      val jobTitle =
+        person.optJSONArray("jobTitle")?.optString(0).orEmpty()
+          .ifBlank { person.optString("jobTitle") }
+          .trim()
+      val worksForArr = person.optJSONArray("worksFor")
+      val worksForObj = worksForArr?.optJSONObject(0) ?: person.optJSONObject("worksFor")
+      val company = worksForObj?.optString("name").orEmpty().trim()
+      val addrObj = person.optJSONObject("address")
+      val location =
+        listOf(
+          addrObj?.optString("addressLocality").orEmpty(),
+          addrObj?.optString("addressRegion").orEmpty(),
+          addrObj?.optString("addressCountry").orEmpty(),
+        ).filter { it.isNotBlank() }.joinToString(", ")
+      val desc = person.optString("description").trim().take(240)
+      val email = person.optString("email").trim()
+      val phone = person.optString("telephone").trim()
+      return LinkedInCandidate(
+        id = "li_jsonld_${abs((profileUrl + name).hashCode())}",
+        name = name,
+        title = jobTitle.ifBlank { "LinkedIn Profile" },
+        company = company,
+        email = email,
+        phone = phone,
+        industry = worksForObj?.optString("industry").orEmpty().trim(),
+        location = location,
+        profileUrl = profileUrl,
+        captureMethod = "No-API LinkedIn JSON-LD",
+        bio = desc,
+        selected = true,
+      )
+    }
+    return null
+  }
+
   private fun fetchFromLiveWebIndex(profileUrl: String): LinkedInCandidate? {
+    val cleanPath = profileUrl.substringAfter("://").substringBefore("?").trimEnd('/')
+    val encodedQuery = URLEncoder.encode(cleanPath, "UTF-8")
+    // Try DuckDuckGo HTML first
+    val ddgCandidate =
+      try {
+        val req =
+          Request.Builder()
+            .url("https://html.duckduckgo.com/html/?q=$encodedQuery")
+            .header(
+              "User-Agent",
+              "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36",
+            )
+            .get()
+            .build()
+        httpClient.newCall(req).execute().use { resp ->
+          if (!resp.isSuccessful) null
+          else {
+            val html = resp.body?.string()?.take(120_000) ?: ""
+            val titleRegex =
+              Regex("""<a[^>]+class="[^"]*result__a[^"]*"[^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            val snippetRegex =
+              Regex("""<(?:a|div)[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</(?:a|div)>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            val firstTitle = stripHtml(titleRegex.find(html)?.groupValues?.getOrNull(1).orEmpty())
+            val firstSnippet = stripHtml(snippetRegex.find(html)?.groupValues?.getOrNull(1).orEmpty())
+            if (firstTitle.isBlank()) null
+            else parseRealTitleAndSnippet(profileUrl, firstTitle, firstSnippet, "No-API Live Web Index")
+          }
+        }
+      } catch (_: Exception) {
+        null
+      }
+    if (ddgCandidate != null) return ddgCandidate
+
+    // Fallback to Bing Web Index
     return try {
-      val cleanPath = profileUrl.substringAfter("://").substringBefore("?").trimEnd('/')
-      val encodedQuery = URLEncoder.encode(cleanPath, "UTF-8")
       val req =
         Request.Builder()
-          .url("https://html.duckduckgo.com/html/?q=$encodedQuery")
+          .url("https://www.bing.com/search?q=$encodedQuery")
           .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
           .get()
           .build()
       httpClient.newCall(req).execute().use { resp ->
-        if (!resp.isSuccessful) return null
-        val html = resp.body?.string()?.take(98304) ?: return null
-        val titleRegex =
-          Regex("""<a[^>]+class="[^"]*result__a[^"]*"[^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        val snippetRegex =
-          Regex("""<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        val firstTitle = stripHtml(titleRegex.find(html)?.groupValues?.getOrNull(1).orEmpty())
-        val firstSnippet = stripHtml(snippetRegex.find(html)?.groupValues?.getOrNull(1).orEmpty())
-        if (firstTitle.isBlank()) return null
-        parseRealTitleAndSnippet(profileUrl, firstTitle, firstSnippet, "Live Web Search Index")
+        if (!resp.isSuccessful) null
+        else {
+          val html = resp.body?.string()?.take(120_000) ?: ""
+          parseBingLinkedInResults(html).firstOrNull()?.copy(profileUrl = profileUrl)
+        }
       }
     } catch (_: Exception) {
       null
@@ -500,6 +803,8 @@ object RealLeadExtractor {
     rawTitle: String,
     rawSnippet: String,
     captureMethod: String,
+    fallbackIndustry: String = "",
+    fallbackLocation: String = "",
   ): LinkedInCandidate? {
     val cleanTitle =
       rawTitle
@@ -530,7 +835,7 @@ object RealLeadExtractor {
       }
 
     val emailMatch = Regex("""[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}""").find(rawSnippet)?.value.orEmpty()
-    val phoneMatch = Regex("""\+?91[\s-]?\d{5}[\s-]?\d{5}""").find(rawSnippet)?.value.orEmpty()
+    val phoneMatch = Regex("""(?:\+?\d{1,3}[\s-]?)?\d{5}[\s-]?\d{5}""").find(rawSnippet)?.value.orEmpty()
     val locationMatch =
       Regex("""(?:Location|Based in)[:\s]+([A-Za-z ,]+)""", RegexOption.IGNORE_CASE)
         .find(rawSnippet)
@@ -538,6 +843,7 @@ object RealLeadExtractor {
         ?.getOrNull(1)
         ?.trim()
         .orEmpty()
+        .ifBlank { fallbackLocation }
 
     return LinkedInCandidate(
       id = "li_live_${abs((profileUrl + name).hashCode())}",
@@ -546,7 +852,7 @@ object RealLeadExtractor {
       company = resolvedCompany,
       email = emailMatch,
       phone = phoneMatch,
-      industry = "",
+      industry = fallbackIndustry,
       location = locationMatch,
       profileUrl = profileUrl,
       captureMethod = captureMethod,

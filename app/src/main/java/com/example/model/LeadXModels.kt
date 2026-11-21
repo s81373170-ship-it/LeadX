@@ -139,22 +139,36 @@ data class LinkedInSearchQuery(
   val pageSize: Int = 10,
 )
 
-enum class AutoFetchInterval(val hours: Long, val label: String) {
-  DAILY(24L, "Daily (24h)"),
-  TWICE_DAILY(12L, "Every 12h"),
-  EVERY_6_HOURS(6L, "Every 6h");
+enum class AutoFetchInterval(val minutes: Long, val label: String) {
+  EVERY_15_MIN(15L, "Every 15m (24/7)"),
+  HOURLY(60L, "Every 1h (24h)"),
+  EVERY_6_HOURS(360L, "Every 6h"),
+  TWICE_DAILY(720L, "Every 12h"),
+  DAILY(1440L, "Daily (24h)");
+
+  val hours: Long
+    get() = (minutes / 60L).coerceAtLeast(1L)
 
   companion object {
     fun fromHours(hours: Long): AutoFetchInterval =
-      entries.firstOrNull { it.hours == hours } ?: DAILY
+      fromMinutes(hours * 60L)
+
+    fun fromMinutes(minutes: Long): AutoFetchInterval =
+      entries.firstOrNull { it.minutes == minutes }
+        ?: entries.firstOrNull { it.hours == (minutes / 60L).coerceAtLeast(1L) }
+        ?: HOURLY
   }
 }
 
 data class AutoFetchConfig(
   val enabled: Boolean = false,
-  val intervalHours: Long = AutoFetchInterval.DAILY.hours,
+  val intervalHours: Long = AutoFetchInterval.HOURLY.hours,
+  val intervalMinutes: Long = AutoFetchInterval.HOURLY.minutes,
   val maxLeadsPerRun: Int = 5,
   val autoSaveToWallet: Boolean = true,
+  val autoExportSeparateCsv: Boolean = true,
+  val continuous24hLoop: Boolean = true,
+  val targetClientName: String = "",
   val roleTitle: String = "",
   val companyName: String = "",
   val industry: String = "",
@@ -168,6 +182,9 @@ data class AutoFetchConfig(
   val lastFetchedCount: Int = 0,
   val totalAutoFetchedCount: Int = 0,
 ) {
+  fun resolvedIntervalMinutes(): Long =
+    if (intervalMinutes >= 15L) intervalMinutes else (intervalHours * 60L).coerceAtLeast(15L)
+
   fun parsedProfileUrls(): List<String> =
     profileUrlsText
       .split('\n', ',', ';')
@@ -191,6 +208,25 @@ data class AutoFetchRunLog(
   val savedCount: Int,
   val statusMessage: String,
   val isError: Boolean = false,
+)
+
+data class CsvBatchRecord(
+  val id: String,
+  val fileName: String,
+  val clientName: String,
+  val categoryLabel: String,
+  val leadCount: Int,
+  val createdAtMillis: Long,
+  val filePath: String,
+)
+
+data class PeriodicSyncState(
+  val enabled: Boolean = true,
+  val lastRunAtMillis: Long = 0L,
+  val lastStatusMessage: String = "Scheduled every 24h via WorkManager",
+  val firestoreUpdated: Boolean = false,
+  val totalRuns: Int = 0,
+  val workerStateLabel: String = "ENQUEUED · Every 24h",
 )
 
 data class RtoOfficeInfo(

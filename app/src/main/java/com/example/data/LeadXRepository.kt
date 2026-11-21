@@ -31,7 +31,19 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
+
+data class PeriodicFirestoreSyncResult(
+  val syncedUserId: String,
+  val firestoreUpdated: Boolean,
+  val fetchedRecordCount: Int,
+  val simulatedBatchLabel: String,
+  val statusMessage: String,
+  val timestampMillis: Long,
+)
 
 class LeadXRepository(
   private val dao: LeadXDao,
@@ -551,7 +563,141 @@ class LeadXRepository(
 
   suspend fun searchLinkedInB2BLeads(query: LinkedInSearchQuery): Result<List<LinkedInCandidate>> =
     withContext(Dispatchers.IO) {
-      RealLeadExtractor.searchB2BLeadsViaProxycurl(query)
+      RealLeadExtractor.searchLinkedInNoApi(query)
+    }
+
+  /**
+   * Simulates a periodic 24-hour remote B2B dataset fetch and updates both Room and Cloud Firestore
+   * (when authenticated). All fields obey firestore.rules parity and zero points are deducted.
+   */
+  suspend fun perform24hSimulatedFetchAndFirestoreSync(): Result<PeriodicFirestoreSyncResult> =
+    try {
+      dao.seedInitialAccountsIfEmpty()
+      val now = System.currentTimeMillis()
+      val accounts = dao.observeAccounts().first()
+      val ownerAccount =
+        accounts.firstOrNull { it.role == AccountRole.OWNER.wireValue }
+          ?: accounts.firstOrNull()
+      val ownerLoginId = ownerAccount?.loginId ?: "OWN1001"
+      val existingLeadsCount = dao.observeLeads().first().size
+
+      val stamp = SimpleDateFormat("dd MMM HH:mm", Locale.US).format(Date(now))
+      val batchTag = "24H_SIM_${SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date(now))}"
+      val simulatedSyncEntity =
+        LeadEntity(
+          id = "lead_sync24h_${UUID.randomUUID()}",
+          source = LeadSource.LINKEDIN.wireValue,
+          ownerAccountId = ownerAccount?.ownerAccountId?.ifBlank { ownerLoginId } ?: ownerLoginId,
+          fetchedByLoginId = ownerLoginId,
+          name = "24h Periodic Fetch Snapshot ($stamp)".take(100),
+          title = "Simulated 24h Background Data Sync".take(140),
+          company = "LeadX Cloud Sync [$batchTag]".take(120),
+          email = "",
+          phone = "",
+          industry = "Automated 24h WorkManager Refresh",
+          location = "India · Periodic Sync",
+          plateNumber = "",
+          vehicleDetails =
+            "Simulated 24h fetch ($batchTag) · ${accounts.size} accounts · $existingLeadsCount prior leads synced"
+              .take(240),
+          profileUrl = "",
+          consentGranted = true,
+          pointsCost = 0L,
+          createdAtMillis = now,
+        )
+
+      dao.insertLead(simulatedSyncEntity)
+
+      val uid = currentUid().orEmpty()
+      val db = firestore
+      val firestoreUpdated =
+        if (uid.isNotBlank() && db != null) {
+          val syncOutcome = syncFromFirestore(uid)
+          writeLeadToFirestore(uid, simulatedSyncEntity)
+          if (ownerAccount != null) {
+            saveActiveRoleProfileToFirestore(uid, ownerAccount.toDomain(uid))
+          }
+          syncOutcome.isSuccess
+        } else {
+          false
+        }
+
+      val statusMsg =
+        if (firestoreUpdated) {
+          "24h WorkManager simulated fetch completed ($batchTag) & updated Firestore."
+        } else {
+          "24h WorkManager simulated fetch stored in Room ($batchTag) — sign in with Google to push to Firestore."
+        }
+
+      Result.success(
+        PeriodicFirestoreSyncResult(
+          syncedUserId = uid,
+          firestoreUpdated = firestoreUpdated,
+          fetchedRecordCount = 1,
+          simulatedBatchLabel = batchTag,
+          statusMessage = statusMsg,
+          timestampMillis = now,
+        )
+      )
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      Result.failure(e)
+    }
+
+  suspend fun importCsvLeadsToDb(
+    accountId: String,
+    ownerAccountId: String,
+    leads: List<LeadRecord>,
+  ): Result<Int> =
+    try {
+      require(leads.isNotEmpty()) { "No valid leads in CSV to import." }
+      val existing = dao.observeLeads().first()
+      val existingUrls =
+        existing.map { it.profileUrl.trim().substringBefore("?").trimEnd('/').lowercase() }.filter { it.isNotBlank() }.toHashSet()
+      val existingKeys =
+        existing.map { "${it.name.trim().lowercase()}|${it.company.trim().lowercase()}" }.toHashSet()
+
+      val now = System.currentTimeMillis()
+      val freshEntities =
+        leads.mapIndexedNotNull { idx, r ->
+          val urlNorm = r.profileUrl.trim().substringBefore("?").trimEnd('/').lowercase()
+          val idKey = "${r.name.trim().lowercase()}|${r.company.trim().lowercase()}"
+          if ((urlNorm.isNotBlank() && !existingUrls.add(urlNorm)) || (r.name.isNotBlank() && !existingKeys.add(idKey))) {
+            return@mapIndexedNotNull null
+          }
+          LeadEntity(
+            id = "lead_csv_${UUID.randomUUID()}",
+            source = r.source.ifBlank { LeadSource.LINKEDIN.wireValue },
+            ownerAccountId = ownerAccountId,
+            fetchedByLoginId = accountId,
+            name = r.name.take(100),
+            title = r.title.take(140),
+            company = r.company.take(120),
+            email = r.email.take(120),
+            phone = r.phone.take(40),
+            industry = r.industry.take(140),
+            location = r.location.take(120),
+            plateNumber = r.plateNumber.take(20),
+            vehicleDetails = r.vehicleDetails.take(240),
+            profileUrl = r.profileUrl.take(300),
+            consentGranted = true,
+            pointsCost = 0L,
+            createdAtMillis = now + idx,
+          )
+        }
+      if (freshEntities.isNotEmpty()) {
+        dao.insertLeads(freshEntities)
+        val uid = currentUid()
+        if (!uid.isNullOrBlank()) {
+          freshEntities.forEach { writeLeadToFirestore(uid, it) }
+        }
+      }
+      Result.success(freshEntities.size)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      Result.failure(e)
     }
 
   suspend fun captureLinkedInLeads(

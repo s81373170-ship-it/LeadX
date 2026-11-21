@@ -263,6 +263,7 @@ fun SegmentedMonochromeTabs(
   modifier: Modifier = Modifier,
   tagPrefix: String = "segment_tab",
 ) {
+  val useCompactText = tabs.size >= 4
   Surface(
     modifier = modifier.fillMaxWidth(),
     shape = MaterialTheme.shapes.small,
@@ -281,12 +282,14 @@ fun SegmentedMonochromeTabs(
           color = if (selected) InkBlack else Color.Transparent,
           modifier = Modifier.weight(1f).height(40.dp).testTag("${tagPrefix}_$idx"),
         ) {
-          Box(contentAlignment = Alignment.Center) {
+          Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 4.dp)) {
             Text(
               text = label,
-              style = MaterialTheme.typography.labelLarge,
+              style = if (useCompactText) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelLarge,
               color = if (selected) PureWhite else InkGraphite,
               fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+              maxLines = 1,
+              overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             )
           }
         }
@@ -347,16 +350,49 @@ fun AppVersionBadge(
   modifier: Modifier = Modifier,
 ) {
   val versionLabel =
-    androidx.compose.ui.res.stringResource(
-      com.example.R.string.app_version_format,
-      com.example.BuildConfig.VERSION_NAME,
-      com.example.BuildConfig.VERSION_CODE,
-      com.example.BuildConfig.BUILD_TYPE.uppercase(),
-    )
+    if (androidx.compose.ui.platform.LocalInspectionMode.current) {
+      "v1.0.2 · DEBUG"
+    } else {
+      androidx.compose.ui.res.stringResource(
+        com.example.R.string.app_version_format,
+        com.example.BuildConfig.VERSION_NAME,
+        com.example.BuildConfig.VERSION_CODE,
+        com.example.BuildConfig.BUILD_TYPE.uppercase(),
+      )
+    }
   MonochromeBadgeTag(
     text = versionLabel,
     inverted = inverted,
     modifier = modifier.testTag(testTag),
   )
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, name = "LeadX Core Components")
+@Composable
+private fun LeadXComponentsPreview() {
+  com.example.ui.theme.LeadXTheme {
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+      MonolithWalletCard {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          SectionLabel("Wallet Balance · ₹1 = 1 Pt", color = com.example.ui.theme.ObsidianMuted)
+          MinBalanceBadge(meetsMin = true)
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+          text = "25,000 pts",
+          fontFamily = MonoFontFamily,
+          style = MaterialTheme.typography.displaySmall,
+          color = PureWhite,
+        )
+        Spacer(Modifier.height(8.dp))
+        ReserveMeterBar(balance = 25_000L, minReserve = 5_000L)
+      }
+      AppVersionBadge()
+    }
+  }
 }
 

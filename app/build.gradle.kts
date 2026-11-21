@@ -153,6 +153,7 @@ dependencies {
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
+  testImplementation(libs.androidx.work.testing)
   androidTestImplementation(platform(libs.androidx.compose.bom))
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)
   androidTestImplementation(libs.androidx.espresso.core)
@@ -199,8 +200,4 @@ val incrementVersion =
     versionPropsFile.set(layout.projectDirectory.file("version.properties"))
     ciBuild.set(ciRunNumber > 0)
   }
-
-tasks
-  .matching { it.name in setOf("assembleDebug", "assembleRelease", "bundleDebug", "bundleRelease") }
-  .configureEach { finalizedBy(incrementVersion) }
 

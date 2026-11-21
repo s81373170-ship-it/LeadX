@@ -5,6 +5,7 @@ import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -55,10 +56,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -70,11 +73,13 @@ import com.example.model.LINKEDIN_COST_PER_LEAD
 import com.example.model.LeadRecord
 import com.example.model.LinkedInCandidate
 import com.example.model.LinkedInSearchQuery
+import com.example.model.PeriodicSyncState
 import com.example.model.TeamAccount
 import com.example.model.VEHICLE_CHECK_COST
 import com.example.model.VehicleLookupResult
 import com.example.ui.components.EditorialDivider
 import com.example.ui.components.FlashBannerView
+import com.example.ui.components.LeadResultsSkeletonSection
 import com.example.ui.components.LeadXCard
 import com.example.ui.components.MonochromeBadgeTag
 import com.example.ui.components.SectionLabel
@@ -85,6 +90,7 @@ import com.example.ui.theme.HairlineBorder
 import com.example.ui.theme.InkBlack
 import com.example.ui.theme.InkGraphite
 import com.example.ui.theme.InkMuted
+import com.example.ui.theme.LeadXTheme
 import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.PaperBackground
 import com.example.ui.theme.PureWhite
@@ -109,6 +115,9 @@ fun LeadFetchTabsScreen(
   flashBanner: FlashBanner?,
   isBusy: Boolean,
   apiConfigVersion: Int,
+  csvBatchesCount: Int = 0,
+  continuousLoopActive: Boolean = false,
+  periodicSyncState: PeriodicSyncState = PeriodicSyncState(),
   onSelectSubTab: (Int) -> Unit,
   onSearchLinkedInB2B: (LinkedInSearchQuery) -> Unit,
   onExtractLinkedInUrl: (String) -> Unit,
@@ -116,18 +125,22 @@ fun LeadFetchTabsScreen(
   onToggleCandidate: (String) -> Unit,
   onSelectAllCandidates: (Boolean) -> Unit,
   onClearCandidates: () -> Unit,
-  onSaveSelectedLinkedIn: () -> Unit,
+  onSaveSelectedLinkedIn: (String) -> Unit,
   onFetchVehicleByPlate: (String) -> Unit,
   onRequestConsent: () -> Unit,
   onSaveAutoFetchConfig: (AutoFetchConfig) -> Unit,
   onRunAutoFetchNow: (AutoFetchConfig) -> Unit,
+  onTogglePeriodicFirestoreSync: (Boolean) -> Unit = {},
+  onRunPeriodicFirestoreSyncNow: () -> Unit = {},
   onShowMessage: (String, Boolean) -> Unit,
   onOpenApiKeys: () -> Unit,
   onDismissFlash: () -> Unit,
   onBackDashboard: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  BackHandler { onBackDashboard() }
+  if (!LocalInspectionMode.current && LocalOnBackPressedDispatcherOwner.current != null) {
+    BackHandler { onBackDashboard() }
+  }
 
   val fieldColors =
     OutlinedTextFieldDefaults.colors(
@@ -183,7 +196,7 @@ fun LeadFetchTabsScreen(
             when (selectedSubTab) {
               0 -> "$LINKEDIN_COST_PER_LEAD PTS/LEAD"
               1 -> "$VEHICLE_CHECK_COST PTS/CHECK"
-              else -> "DAILY AUTO"
+              else -> "24H AUTO"
             },
           inverted = true,
         )
@@ -192,7 +205,7 @@ fun LeadFetchTabsScreen(
       Spacer(Modifier.height(14.dp))
 
       SegmentedMonochromeTabs(
-        tabs = listOf("LinkedIn B2B", "Number Plate", "Daily Auto"),
+        tabs = listOf("LinkedIn B2B", "Number Plate", "24h Auto"),
         selectedIndex = selectedSubTab,
         onSelect = onSelectSubTab,
       )
@@ -259,9 +272,14 @@ fun LeadFetchTabsScreen(
             stagedCandidates = candidates,
             isBusy = isBusy,
             apiConfigVersion = apiConfigVersion,
+            csvBatchesCount = csvBatchesCount,
+            continuousLoopActive = continuousLoopActive,
+            periodicSyncState = periodicSyncState,
             fieldColors = fieldColors,
             onSaveConfig = onSaveAutoFetchConfig,
             onRunNow = onRunAutoFetchNow,
+            onTogglePeriodicFirestoreSync = onTogglePeriodicFirestoreSync,
+            onRunPeriodicFirestoreSyncNow = onRunPeriodicFirestoreSyncNow,
             onShowMessage = onShowMessage,
             onOpenApiKeys = onOpenApiKeys,
             onToggleCandidate = onToggleCandidate,
@@ -290,7 +308,7 @@ private fun LinkedInInputTabPane(
   onToggleCandidate: (String) -> Unit,
   onSelectAll: (Boolean) -> Unit,
   onClearCandidates: () -> Unit,
-  onSaveSelected: () -> Unit,
+  onSaveSelected: (String) -> Unit,
   onOpenApiKeys: () -> Unit,
 ) {
   var linkedInMode by rememberSaveable { mutableStateOf(0) }
@@ -302,7 +320,11 @@ private fun LinkedInInputTabPane(
   var webViewRef by remember { mutableStateOf<WebView?>(null) }
   var webViewError by remember { mutableStateOf<String?>(null) }
 
-  val hasProxycurl = remember(apiConfigVersion) { RealLeadExtractor.isProxycurlConfigured() }
+  val isPreview = LocalInspectionMode.current
+  val hasProxycurl =
+    remember(apiConfigVersion, isPreview) {
+      !isPreview && runCatching { RealLeadExtractor.isProxycurlConfigured() }.getOrDefault(false)
+    }
 
   SegmentedMonochromeTabs(
     tabs = listOf("B2B Search", "Profile URL", "DOM & JSON"),
@@ -335,12 +357,12 @@ private fun LinkedInInputTabPane(
             SectionLabel("Direct LinkedIn Profile URL", color = InkBlack)
           }
           MonochromeBadgeTag(
-            text = if (hasProxycurl) "PROXYCURL LIVE" else "PUBLIC META",
+            text = "PUBLIC · NO API",
           )
         }
         Spacer(Modifier.height(8.dp))
         Text(
-          text = "Extracts a specific LinkedIn profile via Proxycurl API or public LinkedIn metadata.",
+          text = "Extracts LinkedIn profile bio, role, company, and location via public JSON-LD, OpenGraph, and live web index without requiring any API key.",
           style = MaterialTheme.typography.bodyMedium,
           color = InkGraphite,
         )
@@ -368,18 +390,7 @@ private fun LinkedInInputTabPane(
             Icon(Icons.Rounded.AddLink, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
           }
-          Text("Extract Real LinkedIn Lead", fontWeight = FontWeight.Bold)
-        }
-        if (!hasProxycurl) {
-          Spacer(Modifier.height(8.dp))
-          OutlinedButton(
-            onClick = onOpenApiKeys,
-            border = BorderStroke(1.dp, HairlineBorder),
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-          ) {
-            Text("Set Proxycurl API Key (Optional)", color = InkGraphite, fontWeight = FontWeight.SemiBold)
-          }
+          Text("Extract LinkedIn Lead (No API)", fontWeight = FontWeight.Bold)
         }
       }
     }
@@ -487,6 +498,14 @@ private fun LinkedInInputTabPane(
           Text("Reload", color = InkBlack, style = MaterialTheme.typography.labelMedium)
         }
         OutlinedButton(
+          onClick = { webViewRef?.loadUrl("https://www.linkedin.com/search/results/people/") },
+          border = BorderStroke(1.dp, HairlineBorder),
+          shape = RoundedCornerShape(8.dp),
+          modifier = Modifier.height(40.dp),
+        ) {
+          Text("People", color = InkBlack, style = MaterialTheme.typography.labelMedium)
+        }
+        OutlinedButton(
           onClick = { webViewRef?.loadUrl("https://www.linkedin.com/sales/search/people") },
           border = BorderStroke(1.dp, HairlineBorder),
           shape = RoundedCornerShape(8.dp),
@@ -510,6 +529,10 @@ private fun LinkedInInputTabPane(
                     var titleEl = card.querySelector('span[data-anonymize="title"], .artdeco-entity-lockup__subtitle span[data-anonymize="title"], .entity-result__primary-subtitle, .artdeco-entity-lockup__subtitle');
                     var companyEl = card.querySelector('a[data-anonymize="company-name"], span[data-anonymize="company-name"], .artdeco-entity-lockup__subtitle a');
                     var locEl = card.querySelector('span[data-anonymize="location"], .artdeco-entity-lockup__caption span, .entity-result__secondary-subtitle');
+                    var summaryEl = card.querySelector('.entity-result__summary, .artdeco-entity-lockup__metadata, p');
+                    var cardText = card.innerText || '';
+                    var emailMatch = cardText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                    var phoneMatch = cardText.match(/(?:\+?\d{1,3}[\s-]?)?\d{5}[\s-]?\d{5}/);
                     var name = nameEl ? nameEl.innerText.trim() : '';
                     var url = linkEl && linkEl.href ? linkEl.href.split('?')[0] : '';
                     var title = titleEl ? titleEl.innerText.trim() : '';
@@ -526,8 +549,9 @@ private fun LinkedInInputTabPane(
                         title: title,
                         company: company,
                         location: locEl ? locEl.innerText.trim() : '',
-                        email: '',
-                        phone: ''
+                        bio: summaryEl ? summaryEl.innerText.trim().slice(0, 220) : '',
+                        email: emailMatch ? emailMatch[0] : '',
+                        phone: phoneMatch ? phoneMatch[0] : ''
                       });
                     }
                   });
@@ -540,6 +564,11 @@ private fun LinkedInInputTabPane(
                     }
                     var headline = document.querySelector('.text-body-medium.break-words')?.innerText?.trim() || '';
                     var locSingle = document.querySelector('.text-body-small.inline.t-black--light.break-words')?.innerText?.trim() || '';
+                    var aboutSingle = document.querySelector('#about')?.parentElement?.innerText?.replace(/^About\s*/i, '').trim() || '';
+                    var bodyText = document.body.innerText || '';
+                    var mailSingle = (document.querySelector('a[href^="mailto:"]')?.href || '').replace('mailto:', '').trim() ||
+                      (bodyText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/)?.[0] || '');
+                    var phoneSingle = bodyText.match(/(?:\+?\d{1,3}[\s-]?)?\d{5}[\s-]?\d{5}/)?.[0] || '';
                     if (nameSingle && nameSingle.toLowerCase() !== 'linkedin') {
                       results.push({
                         name: nameSingle,
@@ -547,8 +576,9 @@ private fun LinkedInInputTabPane(
                         title: headline,
                         company: '',
                         location: locSingle,
-                        email: '',
-                        phone: ''
+                        bio: aboutSingle.slice(0, 220),
+                        email: mailSingle,
+                        phone: phoneSingle
                       });
                     }
                   }
@@ -593,7 +623,14 @@ private fun LinkedInInputTabPane(
             .background(SoftAlabaster),
         contentAlignment = Alignment.Center,
       ) {
-        if (webViewError != null) {
+        if (LocalInspectionMode.current) {
+          Text(
+            text = "In-app LinkedIn WebView Preview",
+            style = MaterialTheme.typography.bodyMedium,
+            color = InkGraphite,
+            modifier = Modifier.padding(16.dp),
+          )
+        } else if (webViewError != null) {
           Text(
             text = webViewError ?: "In-app browser unavailable on this device. Use Paste DOM JSON instead.",
             style = MaterialTheme.typography.bodyMedium,
@@ -641,14 +678,18 @@ private fun LinkedInInputTabPane(
   }
 
   Spacer(Modifier.height(14.dp))
-  StructuredLeadResultsList(
-    candidates = candidates,
-    isBusy = isBusy,
-    onToggleCandidate = onToggleCandidate,
-    onSelectAll = onSelectAll,
-    onClearCandidates = onClearCandidates,
-    onSaveSelected = onSaveSelected,
-  )
+  if (isBusy && candidates.isEmpty()) {
+    LeadResultsSkeletonSection()
+  } else {
+    StructuredLeadResultsList(
+      candidates = candidates,
+      isBusy = isBusy,
+      onToggleCandidate = onToggleCandidate,
+      onSelectAll = onSelectAll,
+      onClearCandidates = onClearCandidates,
+      onSaveSelected = onSaveSelected,
+    )
+  }
 }
 
 private fun decodeEvaluateJavascriptJson(rawResult: String?): String {
@@ -670,7 +711,11 @@ private fun NumberPlateInputTabPane(
   onOpenApiKeys: () -> Unit,
 ) {
   var plateInput by rememberSaveable { mutableStateOf("") }
-  val hasSurepass = remember(apiConfigVersion) { RealLeadExtractor.isSurepassConfigured() }
+  val isPreview = LocalInspectionMode.current
+  val hasSurepass =
+    remember(apiConfigVersion, isPreview) {
+      !isPreview && runCatching { RealLeadExtractor.isSurepassConfigured() }.getOrDefault(false)
+    }
 
   LeadXCard(borderColor = StrongBorder) {
     Row(
@@ -931,6 +976,76 @@ private fun RcDetailRow(label: String, value: String, highlight: Boolean = false
       style = MaterialTheme.typography.bodyLarge,
       fontWeight = if (highlight) FontWeight.Bold else FontWeight.Medium,
       color = InkBlack,
+    )
+  }
+}
+
+@Preview(showBackground = true, showSystemUi = true, name = "Lead Fetch Tabs Preview")
+@Composable
+private fun LeadFetchTabsScreenPreview() {
+  LeadXTheme {
+    LeadFetchTabsScreen(
+      account = TeamAccount(loginId = "OWN1001", fullName = "Aarav Mehta", balance = 25_000L),
+      selectedSubTab = 0,
+      candidates = emptyList(),
+      scopedLeads = emptyList(),
+      lastVehicleResult = null,
+      autoFetchConfig = AutoFetchConfig(),
+      autoFetchLogs = emptyList(),
+      flashBanner = null,
+      isBusy = false,
+      apiConfigVersion = 0,
+      onSelectSubTab = {},
+      onSearchLinkedInB2B = {},
+      onExtractLinkedInUrl = {},
+      onExtractWebViewDomJson = {},
+      onToggleCandidate = {},
+      onSelectAllCandidates = {},
+      onClearCandidates = {},
+      onSaveSelectedLinkedIn = {},
+      onFetchVehicleByPlate = {},
+      onRequestConsent = {},
+      onSaveAutoFetchConfig = {},
+      onRunAutoFetchNow = {},
+      onShowMessage = { _, _ -> },
+      onOpenApiKeys = {},
+      onDismissFlash = {},
+      onBackDashboard = {},
+    )
+  }
+}
+
+@Preview(showBackground = true, showSystemUi = true, name = "Lead Fetch Skeleton Loading")
+@Composable
+private fun LeadFetchTabsSkeletonPreview() {
+  LeadXTheme {
+    LeadFetchTabsScreen(
+      account = TeamAccount(loginId = "OWN1001", fullName = "Aarav Mehta", balance = 25_000L),
+      selectedSubTab = 0,
+      candidates = emptyList(),
+      scopedLeads = emptyList(),
+      lastVehicleResult = null,
+      autoFetchConfig = AutoFetchConfig(),
+      autoFetchLogs = emptyList(),
+      flashBanner = null,
+      isBusy = true,
+      apiConfigVersion = 0,
+      onSelectSubTab = {},
+      onSearchLinkedInB2B = {},
+      onExtractLinkedInUrl = {},
+      onExtractWebViewDomJson = {},
+      onToggleCandidate = {},
+      onSelectAllCandidates = {},
+      onClearCandidates = {},
+      onSaveSelectedLinkedIn = {},
+      onFetchVehicleByPlate = {},
+      onRequestConsent = {},
+      onSaveAutoFetchConfig = {},
+      onRunAutoFetchNow = {},
+      onShowMessage = { _, _ -> },
+      onOpenApiKeys = {},
+      onDismissFlash = {},
+      onBackDashboard = {},
     )
   }
 }

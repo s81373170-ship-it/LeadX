@@ -17,8 +17,10 @@ import com.example.data.local.LeadXDao
 import com.example.model.AccountRole
 import com.example.model.AutoFetchConfig
 import com.example.model.AutoFetchRunLog
+import com.example.model.CsvBatchRecord
 import com.example.model.LINKEDIN_COST_PER_LEAD
 import com.example.model.LeadRecord
+import com.example.model.LeadSource
 import com.example.model.LinkedInCandidate
 import com.example.model.LinkedInSearchQuery
 import com.example.model.MIN_WALLET_BALANCE
@@ -31,6 +33,7 @@ data class AutoFetchOutcome(
   val stagedCandidates: List<LinkedInCandidate>,
   val statusMessage: String,
   val isError: Boolean,
+  val generatedCsvBatch: CsvBatchRecord? = null,
 )
 
 object AutoFetchNotifier {
@@ -91,7 +94,7 @@ object AutoFetchEngine {
 
   /**
    * Deduplicates candidates against each other and already-saved workspace leads
-   * so daily runs never charge duplicate points for previously captured contacts.
+   * so continuous 24h runs never store or charge duplicate points for previously captured contacts.
    */
   fun deduplicateNewCandidates(
     fetched: List<LinkedInCandidate>,
@@ -128,6 +131,7 @@ object AutoFetchEngine {
     notifyUser: Boolean = true,
   ): AutoFetchOutcome {
     RealLeadExtractor.init(context)
+    CsvBatchManager.init(context)
     dao.seedInitialAccountsIfEmpty()
     val now = System.currentTimeMillis()
 
@@ -140,7 +144,7 @@ object AutoFetchEngine {
     val collected = mutableListOf<LinkedInCandidate>()
     var lastErrorMsg = ""
 
-    // 1. Fetch configured watchlist LinkedIn URLs (Proxycurl / Public Meta / DuckDuckGo Web Index)
+    // 1. Fetch configured watchlist LinkedIn URLs (No-API Public HTML + Web Index first)
     val urls = config.parsedProfileUrls().take(config.maxLeadsPerRun)
     for (url in urls) {
       val res = RealLeadExtractor.fetchRealLinkedInProfile(url)
@@ -150,7 +154,7 @@ object AutoFetchEngine {
       }
     }
 
-    // 2. Fetch Proxycurl B2B search leads when filters + API key are available
+    // 2. Fetch No-API LinkedIn B2B index results when search filters are provided
     val remainingCapacity = (config.maxLeadsPerRun - collected.size).coerceAtLeast(0)
     if (config.hasSearchFilters() && remainingCapacity > 0) {
       val query =
@@ -162,7 +166,7 @@ object AutoFetchEngine {
           countryCode = config.countryCode,
           pageSize = remainingCapacity,
         )
-      val searchRes = RealLeadExtractor.searchB2BLeadsViaProxycurl(query)
+      val searchRes = RealLeadExtractor.searchLinkedInNoApi(query)
       searchRes.onSuccess { list -> collected.addAll(list) }
       searchRes.onFailure { err ->
         if (lastErrorMsg.isBlank()) lastErrorMsg = err.message.orEmpty()
@@ -172,11 +176,11 @@ object AutoFetchEngine {
     if (collected.isEmpty()) {
       val msg =
         lastErrorMsg.ifBlank {
-          "No real contact or bio leads could be fetched right now. Check Proxycurl API key or LinkedIn URLs."
+          "No public LinkedIn profiles returned right now. Adjust filters or capture via LinkedIn DOM."
         }
       recordOutcome(context, config, 0, 0, msg, isError = true, now = now)
       if (notifyUser) {
-        AutoFetchNotifier.notifyRunResult(context, "LeadX Daily Auto-Fetch", msg)
+        AutoFetchNotifier.notifyRunResult(context, "LeadX 24h Auto-Fetch", msg)
       }
       return AutoFetchOutcome(0, 0, emptyList(), msg, isError = true)
     }
@@ -187,15 +191,23 @@ object AutoFetchEngine {
 
     if (freshCandidates.isEmpty()) {
       val msg =
-        "Checked ${collected.size} profile(s) — all contact & bio records are already saved (0 duplicates charged)."
+        "Checked ${collected.size} profile(s) — all contact & bio records are already saved (0 duplicates)."
       recordOutcome(context, config, collected.size, 0, msg, isError = false, now = now)
       return AutoFetchOutcome(collected.size, 0, emptyList(), msg, isError = false)
     }
 
     var savedCount = 0
     val stagedRemaining = mutableListOf<LinkedInCandidate>()
+    var generatedBatch: CsvBatchRecord? = null
     var finalMessage = ""
     var isError = false
+    val clientLabel =
+      config.targetClientName.trim().ifBlank {
+        listOf(config.roleTitle, config.companyName, config.city)
+          .filter { it.isNotBlank() }
+          .joinToString(" · ")
+          .ifBlank { "24h AutoClient" }
+      }
 
     if (config.autoSaveToWallet) {
       val targetAccount =
@@ -206,16 +218,41 @@ object AutoFetchEngine {
       if (targetAccount == null) {
         stagedRemaining.addAll(freshCandidates)
         AutoFetchPreferences.saveStagedCandidates(context, stagedRemaining)
-        finalMessage = "Fetched ${freshCandidates.size} lead(s) to preview queue (no active wallet account found)."
+        if (config.autoExportSeparateCsv) {
+          generatedBatch =
+            CsvBatchManager.createBatchFromCandidates(
+              context = context,
+              candidates = freshCandidates,
+              ownerAccountId = config.ownerAccountId,
+              fetchedByLoginId = config.activeLoginId,
+              clientName = clientLabel,
+              categoryLabel = "24h Auto-Fetch (Preview)",
+            )
+        }
+        finalMessage =
+          "Fetched ${freshCandidates.size} lead(s) to preview queue" +
+            (generatedBatch?.let { " + CSV ${it.fileName}" } ?: ".")
       } else {
         val usablePoints = (targetAccount.balance - MIN_WALLET_BALANCE).coerceAtLeast(0L)
         val affordableCount = (usablePoints / LINKEDIN_COST_PER_LEAD).toInt().coerceAtMost(freshCandidates.size)
         if (affordableCount <= 0) {
           stagedRemaining.addAll(freshCandidates)
           AutoFetchPreferences.saveStagedCandidates(context, stagedRemaining)
+          if (config.autoExportSeparateCsv) {
+            generatedBatch =
+              CsvBatchManager.createBatchFromCandidates(
+                context = context,
+                candidates = freshCandidates,
+                ownerAccountId = targetAccount.ownerAccountId,
+                fetchedByLoginId = targetAccount.loginId,
+                clientName = clientLabel,
+                categoryLabel = "24h Auto-Fetch (CSV Ready)",
+              )
+          }
           finalMessage =
-            "Minimum 5000 balance required, please recharge — ${freshCandidates.size} lead(s) staged in preview."
-          isError = true
+            "Minimum 5000 balance required for DB capture — ${freshCandidates.size} lead(s) staged" +
+              (generatedBatch?.let { " & saved to ${it.fileName}" } ?: ".")
+          isError = generatedBatch == null
         } else {
           val toSave = freshCandidates.take(affordableCount)
           val overflow = freshCandidates.drop(affordableCount)
@@ -232,9 +269,43 @@ object AutoFetchEngine {
                 stagedRemaining.addAll(overflow)
                 AutoFetchPreferences.saveStagedCandidates(context, stagedRemaining)
               }
+              if (config.autoExportSeparateCsv) {
+                val savedLeadRecords =
+                  toSave.mapIndexed { idx, c ->
+                    LeadRecord(
+                      id = "csv_auto_${now}_$idx",
+                      source = LeadSource.LINKEDIN.wireValue,
+                      ownerAccountId = targetAccount.ownerAccountId,
+                      fetchedByLoginId = targetAccount.loginId,
+                      name = c.name,
+                      title = c.title,
+                      company = c.company,
+                      email = c.email,
+                      phone = c.phone,
+                      industry = c.industry,
+                      location = c.location,
+                      vehicleDetails = listOfNotNull(
+                        c.bio.takeIf { it.isNotBlank() }?.let { "Bio: $it" },
+                        c.captureMethod.takeIf { it.isNotBlank() },
+                      ).joinToString(" · "),
+                      profileUrl = c.profileUrl,
+                      consentGranted = true,
+                      pointsCost = LINKEDIN_COST_PER_LEAD,
+                      createdAtMillis = now + idx,
+                    )
+                  }
+                generatedBatch =
+                  CsvBatchManager.createBatchFromLeads(
+                    context = context,
+                    leads = savedLeadRecords,
+                    clientName = clientLabel,
+                    categoryLabel = "24h No-API Auto-Fetch",
+                  )
+              }
               finalMessage =
-                "Auto-fetched & saved $saved contact/bio lead${if (saved > 1) "s" else ""} (-${saved * LINKEDIN_COST_PER_LEAD} pts)." +
-                  if (overflow.isNotEmpty()) " ${overflow.size} staged (reserve limit)." else ""
+                "Auto-fetched & saved $saved lead${if (saved > 1) "s" else ""} (-${saved * LINKEDIN_COST_PER_LEAD} pts)" +
+                  (generatedBatch?.let { " · Client CSV: ${it.fileName}" } ?: ".") +
+                  if (overflow.isNotEmpty()) " (${overflow.size} staged)." else ""
             },
             onFailure = { err ->
               stagedRemaining.addAll(freshCandidates)
@@ -248,15 +319,27 @@ object AutoFetchEngine {
     } else {
       stagedRemaining.addAll(freshCandidates)
       AutoFetchPreferences.saveStagedCandidates(context, stagedRemaining)
+      if (config.autoExportSeparateCsv) {
+        generatedBatch =
+          CsvBatchManager.createBatchFromCandidates(
+            context = context,
+            candidates = freshCandidates,
+            ownerAccountId = config.ownerAccountId,
+            fetchedByLoginId = config.activeLoginId,
+            clientName = clientLabel,
+            categoryLabel = "24h No-API Preview CSV",
+          )
+      }
       finalMessage =
-        "Auto-fetched ${freshCandidates.size} fresh contact & bio lead(s) into your preview list."
+        "Auto-fetched ${freshCandidates.size} fresh LinkedIn lead(s)" +
+          (generatedBatch?.let { " & created Client CSV ${it.fileName}" } ?: " into preview.")
     }
 
     recordOutcome(context, config, freshCandidates.size, savedCount, finalMessage, isError, now)
     if (notifyUser) {
       AutoFetchNotifier.notifyRunResult(
         context = context,
-        title = "LeadX Pro · Daily Auto-Fetch",
+        title = "LeadX Pro · 24h Client Lead Auto-Fetch",
         message = finalMessage,
       )
     }
@@ -267,6 +350,7 @@ object AutoFetchEngine {
       stagedCandidates = stagedRemaining,
       statusMessage = finalMessage,
       isError = isError,
+      generatedCsvBatch = generatedBatch,
     )
   }
 

@@ -3,6 +3,7 @@ package com.example.ui.screens
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -40,6 +41,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -57,8 +59,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.data.AutoFetchPreferences
@@ -69,6 +73,7 @@ import com.example.model.AutoFetchRunLog
 import com.example.model.LINKEDIN_COST_PER_LEAD
 import com.example.model.LeadRecord
 import com.example.model.LinkedInCandidate
+import com.example.model.PeriodicSyncState
 import com.example.ui.components.EditorialDivider
 import com.example.ui.components.LeadXCard
 import com.example.ui.components.MonoBadge
@@ -102,23 +107,30 @@ fun AutoFetchSchedulerSection(
   stagedCandidates: List<LinkedInCandidate>,
   isBusy: Boolean,
   apiConfigVersion: Int,
+  csvBatchesCount: Int = 0,
+  continuousLoopActive: Boolean = false,
+  periodicSyncState: PeriodicSyncState = PeriodicSyncState(),
   fieldColors: TextFieldColors,
   onSaveConfig: (AutoFetchConfig) -> Unit,
   onRunNow: (AutoFetchConfig) -> Unit,
+  onTogglePeriodicFirestoreSync: (Boolean) -> Unit = {},
+  onRunPeriodicFirestoreSyncNow: () -> Unit = {},
   onShowMessage: (String, Boolean) -> Unit,
   onOpenApiKeys: () -> Unit,
   onToggleCandidate: (String) -> Unit,
   onSelectAllCandidates: (Boolean) -> Unit,
   onClearCandidates: () -> Unit,
-  onSaveSelectedLinkedIn: () -> Unit,
+  onSaveSelectedLinkedIn: (String) -> Unit,
 ) {
   val context = LocalContext.current
-  val hasProxycurl = remember(apiConfigVersion) { RealLeadExtractor.isProxycurlConfigured() }
 
   var enabled by rememberSaveable { mutableStateOf(config.enabled) }
-  var intervalHours by rememberSaveable { mutableLongStateOf(config.intervalHours) }
+  var intervalMinutes by rememberSaveable { mutableLongStateOf(config.resolvedIntervalMinutes()) }
   var maxLeads by rememberSaveable { mutableStateOf(config.maxLeadsPerRun) }
   var autoSave by rememberSaveable { mutableStateOf(config.autoSaveToWallet) }
+  var autoExportCsv by rememberSaveable { mutableStateOf(config.autoExportSeparateCsv) }
+  var continuous24h by rememberSaveable { mutableStateOf(config.continuous24hLoop) }
+  var targetClientName by rememberSaveable { mutableStateOf(config.targetClientName) }
   var roleTitle by rememberSaveable { mutableStateOf(config.roleTitle) }
   var companyName by rememberSaveable { mutableStateOf(config.companyName) }
   var industry by rememberSaveable { mutableStateOf(config.industry) }
@@ -130,17 +142,27 @@ fun AutoFetchSchedulerSection(
     enabled = config.enabled
   }
 
+  val isInspection = LocalInspectionMode.current
+  val hasActivityRegistry = LocalActivityResultRegistryOwner.current != null
   val notificationPermissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
-      // Background auto-fetch still runs cleanly even if notifications are denied
+    if (!isInspection && hasActivityRegistry) {
+      rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
+        // Background auto-fetch still runs cleanly even if notifications are denied
+      }
+    } else {
+      null
     }
 
   fun buildDraftConfig(overrideEnabled: Boolean = enabled): AutoFetchConfig =
     config.copy(
       enabled = overrideEnabled,
-      intervalHours = intervalHours,
+      intervalHours = (intervalMinutes / 60L).coerceAtLeast(1L),
+      intervalMinutes = intervalMinutes,
       maxLeadsPerRun = maxLeads,
       autoSaveToWallet = autoSave,
+      autoExportSeparateCsv = autoExportCsv,
+      continuous24hLoop = continuous24h,
+      targetClientName = targetClientName.trim(),
       roleTitle = roleTitle.trim(),
       companyName = companyName.trim(),
       industry = industry.trim(),
@@ -150,17 +172,17 @@ fun AutoFetchSchedulerSection(
     )
 
   val requestNotificationPermissionIfNeeded = {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    if (!isInspection && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
       val granted =
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
           PackageManager.PERMISSION_GRANTED
       if (!granted) {
-        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        notificationPermissionLauncher?.launch(Manifest.permission.POST_NOTIFICATIONS)
       }
     }
   }
 
-  // 1. Master Auto-Fetch Engine Card
+  // 1. Master 24h Continuous Auto-Fetch Engine Card
   LeadXCard(borderColor = StrongBorder) {
     Row(
       modifier = Modifier.fillMaxWidth(),
@@ -176,18 +198,18 @@ fun AutoFetchSchedulerSection(
         )
         Spacer(Modifier.width(8.dp))
         Column {
-          SectionLabel("Daily Auto-Fetch Engine", color = InkBlack)
+          SectionLabel("24h Continuous Auto-Fetch (No API)", color = InkBlack)
           Text(
             text =
-              if (enabled) "${AutoFetchInterval.fromHours(intervalHours).label} · Background Sync"
-              else "Scheduled Fetching Paused",
+              if (enabled) "${AutoFetchInterval.fromMinutes(intervalMinutes).label} · 24h Sync"
+              else "24h Lead Generation Paused",
             style = MaterialTheme.typography.titleMedium,
             color = InkBlack,
           )
         }
       }
       StatusPill(
-        text = if (enabled) "ACTIVE" else "OFF",
+        text = if (enabled) (if (continuousLoopActive) "24H LIVE" else "ACTIVE") else "OFF",
         containerColor = if (enabled) SuccessSurface else SoftAlabaster,
         contentColor = if (enabled) SuccessInk else InkGraphite,
         dotColor = if (enabled) SuccessDot else null,
@@ -197,7 +219,7 @@ fun AutoFetchSchedulerSection(
     Spacer(Modifier.height(10.dp))
     Text(
       text =
-        "Automatically fetches fresh contact details, company roles, and career bio data every day via background WorkManager. Duplicate leads are skipped automatically.",
+        "Continuously fetches real LinkedIn leads without any paid API key, saves them to your database, and auto-generates separate Client CSV files every cycle for 24 hours.",
       style = MaterialTheme.typography.bodyMedium,
       color = InkGraphite,
     )
@@ -216,13 +238,13 @@ fun AutoFetchSchedulerSection(
       ) {
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = "Enable Everyday Auto-Fetch",
+            text = "Enable 24h Continuous Auto-Fetch",
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold,
             color = InkBlack,
           )
           Text(
-            text = "Runs automatically on Wi-Fi/Mobile Data & notifies you",
+            text = "Runs automatically every cycle on Wi-Fi/Data & saves separate CSVs",
             style = MaterialTheme.typography.bodyMedium,
             color = InkGraphite,
           )
@@ -234,7 +256,7 @@ fun AutoFetchSchedulerSection(
             val draft = buildDraftConfig(overrideEnabled = next)
             if (next && !draft.hasValidTarget()) {
               onShowMessage(
-                "Add a B2B search filter or LinkedIn URL below before enabling Daily Auto-Fetch.",
+                "Add a B2B search filter or LinkedIn URL below before enabling 24h Auto-Fetch.",
                 true,
               )
               return@Switch
@@ -257,21 +279,21 @@ fun AutoFetchSchedulerSection(
     }
 
     Spacer(Modifier.height(14.dp))
-    SectionLabel("Run Frequency", color = InkMuted)
+    SectionLabel("24h Run Frequency", color = InkMuted)
     Spacer(Modifier.height(6.dp))
     FlowRow(
       horizontalArrangement = Arrangement.spacedBy(8.dp),
       verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       AutoFetchInterval.entries.forEach { option ->
-        val selected = intervalHours == option.hours
+        val selected = intervalMinutes == option.minutes
         Surface(
-          onClick = { intervalHours = option.hours },
+          onClick = { intervalMinutes = option.minutes },
           shape = RoundedCornerShape(8.dp),
           color = if (selected) InkBlack else SoftAlabaster,
           border = BorderStroke(1.dp, if (selected) InkBlack else HairlineBorder),
           modifier =
-            Modifier.minimumInteractiveComponentSize().testTag("autofetch_freq_${option.hours}"),
+            Modifier.minimumInteractiveComponentSize().testTag("autofetch_freq_${option.minutes}"),
         ) {
           Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -296,7 +318,7 @@ fun AutoFetchSchedulerSection(
     }
 
     Spacer(Modifier.height(12.dp))
-    SectionLabel("Max New Leads / Day", color = InkMuted)
+    SectionLabel("Max New Leads / Cycle", color = InkMuted)
     Spacer(Modifier.height(6.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       listOf(3, 5, 10).forEach { count ->
@@ -341,52 +363,214 @@ fun AutoFetchSchedulerSection(
       ) {
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = if (autoSave) "Auto-Save to Leads & Cloud" else "Stage in Preview Queue Only",
+            text = if (autoSave) "Auto-Save to Database & Cloud" else "Stage in Preview Queue Only",
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold,
             color = InkBlack,
           )
           Text(
             text =
-              if (autoSave) "Saves contact + bio directly (-$LINKEDIN_COST_PER_LEAD pts/new lead; keeps ≥5,000 reserve)"
+              if (autoSave) "Stores leads automatically (-$LINKEDIN_COST_PER_LEAD pts/new lead; keeps ≥5,000 reserve)"
               else "Stages fresh leads in preview list (0 pts deducted until you tap Save)",
             style = MaterialTheme.typography.bodyMedium,
             color = InkGraphite,
           )
         }
         Spacer(Modifier.width(8.dp))
-        MonochromeBadgeTag(text = if (autoSave) "AUTO SAVE" else "PREVIEW ONLY", inverted = autoSave)
+        MonochromeBadgeTag(text = if (autoSave) "AUTO DB" else "PREVIEW ONLY", inverted = autoSave)
+      }
+    }
+
+    Spacer(Modifier.height(8.dp))
+    Surface(
+      onClick = { autoExportCsv = !autoExportCsv },
+      shape = MaterialTheme.shapes.small,
+      color = PureWhite,
+      border = BorderStroke(1.dp, HairlineBorder),
+      modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("autofetch_auto_csv_toggle"),
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = "Auto-Generate Separate Client .csv",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = InkBlack,
+          )
+          Text(
+            text = "Creates a separate downloadable CSV batch each cycle ready for your client",
+            style = MaterialTheme.typography.bodyMedium,
+            color = InkGraphite,
+          )
+        }
+        Spacer(Modifier.width(8.dp))
+        MonochromeBadgeTag(text = if (autoExportCsv) "AUTO CSV" else "CSV OFF", inverted = autoExportCsv)
+      }
+    }
+
+    Spacer(Modifier.height(8.dp))
+    Surface(
+      onClick = { continuous24h = !continuous24h },
+      shape = MaterialTheme.shapes.small,
+      color = PureWhite,
+      border = BorderStroke(1.dp, HairlineBorder),
+      modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("autofetch_continuous_loop_toggle"),
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = "24h Continuous Active Loop",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = InkBlack,
+          )
+          Text(
+            text = "Keeps generating new leads automatically in both foreground loop & background WorkManager",
+            style = MaterialTheme.typography.bodyMedium,
+            color = InkGraphite,
+          )
+        }
+        Spacer(Modifier.width(8.dp))
+        MonochromeBadgeTag(text = if (continuous24h) "24H LOOP" else "BG ONLY", inverted = continuous24h)
       }
     }
   }
 
   Spacer(Modifier.height(14.dp))
 
-  // 2. Daily Target Filters & Profile URLs
-  LeadXCard(borderColor = StrongBorder) {
+  // 1B. Dedicated 24-Hour WorkManager Firestore Sync Job Card (Simulated Fetch + Cloud Update)
+  LeadXCard(
+    borderColor = StrongBorder,
+    modifier = Modifier.testTag("workmanager_sync_card"),
+  ) {
     Row(
       modifier = Modifier.fillMaxWidth(),
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      SectionLabel("Daily Fetch Targets (Contact & Bio)", color = InkBlack)
+      Column(modifier = Modifier.weight(1f)) {
+        SectionLabel("WorkManager · 24h Firestore Sync", color = InkBlack)
+        Text(
+          text = periodicSyncState.workerStateLabel,
+          style = MaterialTheme.typography.titleMedium,
+          color = InkBlack,
+        )
+      }
       StatusPill(
-        text = if (hasProxycurl) "PROXYCURL READY" else "URL + WEB MODE",
-        containerColor = if (hasProxycurl) SuccessSurface else WarningSurface,
-        contentColor = if (hasProxycurl) SuccessInk else WarningInk,
-        dotColor = if (hasProxycurl) SuccessDot else null,
+        text = if (periodicSyncState.enabled) "SIMULATION · 24H" else "PAUSED",
+        containerColor = if (periodicSyncState.enabled) WarningSurface else SoftAlabaster,
+        contentColor = if (periodicSyncState.enabled) WarningInk else InkGraphite,
       )
     }
 
     Spacer(Modifier.height(8.dp))
     Text(
       text =
-        "Set B2B Role/Company filters for daily Proxycurl discovery and/or paste LinkedIn Profile URLs (one per line) to pull contact & bio updates automatically.",
+        "Background WorkManager job runs every 24 hours on network connectivity to simulate periodic data fetching and update Cloud Firestore (users & leads collections).",
+      style = MaterialTheme.typography.bodyMedium,
+      color = InkGraphite,
+    )
+
+    Spacer(Modifier.height(10.dp))
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text =
+            if (periodicSyncState.lastRunAtMillis > 0L) {
+              "Last Run: ${formatTimestamp(periodicSyncState.lastRunAtMillis)} · Runs: ${periodicSyncState.totalRuns}"
+            } else {
+              "Runs: ${periodicSyncState.totalRuns} · Waiting next 24h cycle"
+            },
+          fontFamily = MonoFontFamily,
+          style = MaterialTheme.typography.labelSmall,
+          color = InkBlack,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+          text = periodicSyncState.lastStatusMessage,
+          style = MaterialTheme.typography.bodyMedium,
+          color = InkGraphite,
+        )
+      }
+      Spacer(Modifier.width(10.dp))
+      Switch(
+        checked = periodicSyncState.enabled,
+        onCheckedChange = onTogglePeriodicFirestoreSync,
+        colors =
+          SwitchDefaults.colors(
+            checkedThumbColor = PureWhite,
+            checkedTrackColor = InkBlack,
+            uncheckedThumbColor = InkBlack,
+            uncheckedTrackColor = PureWhite,
+            uncheckedBorderColor = InkBlack,
+          ),
+        modifier = Modifier.minimumInteractiveComponentSize().testTag("workmanager_24h_switch"),
+      )
+    }
+
+    Spacer(Modifier.height(10.dp))
+    Button(
+      onClick = onRunPeriodicFirestoreSyncNow,
+      enabled = !isBusy,
+      colors = ButtonDefaults.buttonColors(containerColor = InkBlack, contentColor = PureWhite),
+      shape = RoundedCornerShape(10.dp),
+      modifier = Modifier.fillMaxWidth().height(48.dp).testTag("run_workmanager_sync_now_button"),
+    ) {
+      Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+      Spacer(Modifier.width(6.dp))
+      Text("Run 24h Firestore Sync Job Now", fontWeight = FontWeight.Bold)
+    }
+  }
+
+  Spacer(Modifier.height(14.dp))
+
+  // 2. Client CSV & No-API Target Filters
+  LeadXCard(borderColor = StrongBorder) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      SectionLabel("Client Target Filters (No API)", color = InkBlack)
+      StatusPill(
+        text = "NO API NEEDED",
+        containerColor = SuccessSurface,
+        contentColor = SuccessInk,
+        dotColor = SuccessDot,
+      )
+    }
+
+    Spacer(Modifier.height(8.dp))
+    Text(
+      text =
+        "Set your client name and B2B filters or LinkedIn URLs. LeadX fetches leads automatically without any API key and builds separate CSVs for the client.",
       style = MaterialTheme.typography.bodyMedium,
       color = InkGraphite,
     )
 
     Spacer(Modifier.height(12.dp))
+    OutlinedTextField(
+      value = targetClientName,
+      onValueChange = { targetClientName = it },
+      label = { Text("Client / Customer Name for CSV (e.g. Acme Client)") },
+      colors = fieldColors,
+      singleLine = true,
+      modifier = Modifier.fillMaxWidth().testTag("autofetch_client_input"),
+    )
+
+    Spacer(Modifier.height(10.dp))
     OutlinedTextField(
       value = roleTitle,
       onValueChange = { roleTitle = it },
@@ -470,20 +654,6 @@ fun AutoFetchSchedulerSection(
       modifier = Modifier.fillMaxWidth().testTag("autofetch_urls_input"),
     )
 
-    if (!hasProxycurl) {
-      Spacer(Modifier.height(8.dp))
-      OutlinedButton(
-        onClick = onOpenApiKeys,
-        border = BorderStroke(1.dp, HairlineBorder),
-        shape = RoundedCornerShape(10.dp),
-        modifier = Modifier.fillMaxWidth().height(46.dp),
-      ) {
-        Icon(Icons.Rounded.Key, contentDescription = null, tint = InkBlack, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(8.dp))
-        Text("Add Proxycurl API Key for Automated B2B Discovery", color = InkBlack, fontWeight = FontWeight.SemiBold)
-      }
-    }
-
     Spacer(Modifier.height(14.dp))
     Row(
       modifier = Modifier.fillMaxWidth(),
@@ -501,7 +671,7 @@ fun AutoFetchSchedulerSection(
       ) {
         Icon(Icons.Rounded.Save, contentDescription = null, tint = InkBlack, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(6.dp))
-        Text("Save Schedule", color = InkBlack, fontWeight = FontWeight.Bold)
+        Text("Save 24h Schedule", color = InkBlack, fontWeight = FontWeight.Bold)
       }
       Button(
         onClick = {
@@ -520,7 +690,7 @@ fun AutoFetchSchedulerSection(
           Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
           Spacer(Modifier.width(6.dp))
         }
-        Text("Run Now", fontWeight = FontWeight.Bold)
+        Text("Fetch Now", fontWeight = FontWeight.Bold)
       }
     }
   }
@@ -534,13 +704,13 @@ fun AutoFetchSchedulerSection(
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      SectionLabel("Send Daily Contact & Bio Digest", color = InkBlack)
+      SectionLabel("Client Lead Digest ($csvBatchesCount CSVs)", color = InkBlack)
       MonochromeBadgeTag(text = "${scopedLeads.size + stagedCandidates.size} READY")
     }
     Spacer(Modifier.height(6.dp))
     Text(
       text =
-        "Share or copy a structured daily report containing Name, Role, Company, Bio Data, Email, Phone, and Profile URLs via WhatsApp, Email, or Slack.",
+        "Share or copy a structured report containing Name, Role, Company, Bio Data, Email, Phone, and Profile URLs, or open Team & Ledger -> Client CSVs to send separate .csv files directly.",
       style = MaterialTheme.typography.bodyMedium,
       color = InkGraphite,
     )
@@ -553,7 +723,7 @@ fun AutoFetchSchedulerSection(
         onClick = {
           val digest = AutoFetchPreferences.buildAutoFetchDigestText(scopedLeads, stagedCandidates)
           AutoFetchPreferences.copyDigestToClipboard(context, digest)
-          onShowMessage("Daily Contact & Bio Digest copied to clipboard.", false)
+          onShowMessage("Client Contact & Bio Digest copied to clipboard.", false)
         },
         border = BorderStroke(1.dp, InkBlack),
         shape = RoundedCornerShape(12.dp),
@@ -659,4 +829,33 @@ fun AutoFetchSchedulerSection(
 private fun formatTimestamp(millis: Long): String {
   if (millis <= 0L) return "—"
   return SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(Date(millis))
+}
+
+@Preview(showBackground = true, name = "24h Auto-Fetch Scheduler Preview")
+@Composable
+private fun AutoFetchSchedulerSectionPreview() {
+  com.example.ui.theme.LeadXTheme {
+    Column(modifier = Modifier.padding(16.dp)) {
+      AutoFetchSchedulerSection(
+        config = AutoFetchConfig(enabled = true, targetClientName = "Acme Corp", roleTitle = "VP Sales"),
+        runLogs = emptyList(),
+        scopedLeads = emptyList(),
+        stagedCandidates = emptyList(),
+        isBusy = false,
+        apiConfigVersion = 0,
+        csvBatchesCount = 2,
+        continuousLoopActive = true,
+        periodicSyncState = PeriodicSyncState(enabled = true, totalRuns = 3),
+        fieldColors = OutlinedTextFieldDefaults.colors(),
+        onSaveConfig = {},
+        onRunNow = {},
+        onShowMessage = { _, _ -> },
+        onOpenApiKeys = {},
+        onToggleCandidate = {},
+        onSelectAllCandidates = {},
+        onClearCandidates = {},
+        onSaveSelectedLinkedIn = {},
+      )
+    }
+  }
 }

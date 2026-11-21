@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -56,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -66,6 +68,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.CsvExporter
+import com.example.model.CsvBatchRecord
 import com.example.model.FlashBanner
 import com.example.model.LeadRecord
 import com.example.model.PointTransaction
@@ -99,18 +102,26 @@ fun TeamAndRecordsScreen(
   allAccounts: List<TeamAccount>,
   allLeads: List<LeadRecord>,
   allTransactions: List<PointTransaction>,
+  csvBatches: List<CsvBatchRecord> = emptyList(),
   flashBanner: FlashBanner?,
   isBusy: Boolean,
   onSharePoints: (String, String) -> Unit,
   onCreateEmployee: (String, String, String, () -> Unit) -> Unit,
   onCreateOwner: (String, String, String, () -> Unit) -> Unit,
   onPreviewCsv: (String) -> Unit = {},
+  onSplitCsvs: (groupBy: String, scopedLeads: List<LeadRecord>, clientPrefix: String) -> Unit = { _, _, _ -> },
+  onCreateSingleClientCsv: (scopedLeads: List<LeadRecord>, clientName: String) -> Unit = { _, _ -> },
+  onOpenCsvBatch: (CsvBatchRecord) -> Unit = {},
+  onImportClientCsv: (rawCsv: String, fileName: String, clientName: String) -> Unit = { _, _, _ -> },
+  onDeleteCsvBatch: (String) -> Unit = {},
   onOpenShareApk: () -> Unit = {},
   onDismissFlash: () -> Unit,
   onBackDashboard: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  BackHandler { onBackDashboard() }
+  if (!LocalInspectionMode.current && LocalOnBackPressedDispatcherOwner.current != null) {
+    BackHandler { onBackDashboard() }
+  }
 
   val context = LocalContext.current
   var selectedTab by rememberSaveable { mutableIntStateOf(0) }
@@ -240,7 +251,12 @@ fun TeamAndRecordsScreen(
       )
 
       SegmentedMonochromeTabs(
-        tabs = listOf("Team & Share", "Leads (${scopedLeads.size})", "Ledger (${scopedTxs.size})"),
+        tabs = listOf(
+          "Team & Share",
+          "Leads (${scopedLeads.size})",
+          "Ledger (${scopedTxs.size})",
+          "Client CSVs (${csvBatches.size})",
+        ),
         selectedIndex = selectedTab,
         onSelect = { selectedTab = it },
       )
@@ -502,7 +518,7 @@ fun TeamAndRecordsScreen(
             }
           }
         }
-        else -> {
+        2 -> {
           if (scopedTxs.isEmpty()) {
             EmptyRecordsCard(
               title = "No wallet transactions yet",
@@ -518,6 +534,21 @@ fun TeamAndRecordsScreen(
               }
             }
           }
+        }
+        else -> {
+          ClientCsvHubTabContent(
+            scopedLeads = scopedLeads,
+            csvBatches = csvBatches,
+            isBusy = isBusy,
+            fieldColors = fieldColors,
+            onSplitCsvs = onSplitCsvs,
+            onCreateSingleClientCsv = onCreateSingleClientCsv,
+            onOpenCsvBatch = onOpenCsvBatch,
+            onImportClientCsv = onImportClientCsv,
+            onDeleteCsvBatch = onDeleteCsvBatch,
+            onLocalFeedback = { msg, err -> localBanner = FlashBanner(msg, isError = err) },
+            modifier = Modifier.weight(1f),
+          )
         }
       }
     }
@@ -676,5 +707,25 @@ private fun EmptyRecordsCard(title: String, subtitle: String) {
       Spacer(Modifier.height(4.dp))
       Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = InkGraphite)
     }
+  }
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, showSystemUi = true, name = "Team & Records Preview")
+@Composable
+private fun TeamAndRecordsScreenPreview() {
+  com.example.ui.theme.LeadXTheme {
+    TeamAndRecordsScreen(
+      account = TeamAccount(loginId = "OWN1001", fullName = "Aarav Mehta", balance = 25_000L),
+      allAccounts = listOf(TeamAccount(loginId = "OWN1001", fullName = "Aarav Mehta", balance = 25_000L)),
+      allLeads = emptyList(),
+      allTransactions = emptyList(),
+      flashBanner = null,
+      isBusy = false,
+      onSharePoints = { _, _ -> },
+      onCreateEmployee = { _, _, _, _ -> },
+      onCreateOwner = { _, _, _, _ -> },
+      onDismissFlash = {},
+      onBackDashboard = {},
+    )
   }
 }

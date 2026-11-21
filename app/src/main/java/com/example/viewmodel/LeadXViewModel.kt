@@ -10,6 +10,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.R
 import com.example.data.AutoFetchEngine
 import com.example.data.AutoFetchPreferences
+import com.example.data.CsvBatchManager
 import com.example.data.LeadXRepository
 import com.example.data.LeadXValidators
 import com.example.data.RealLeadExtractor
@@ -19,22 +20,27 @@ import com.example.model.AppTab
 import com.example.model.AutoFetchConfig
 import com.example.model.AutoFetchInterval
 import com.example.model.AutoFetchRunLog
+import com.example.model.CsvBatchRecord
 import com.example.model.FirestoreUserRoleProfile
 import com.example.model.FlashBanner
 import com.example.model.LeadRecord
 import com.example.model.LinkedInCandidate
 import com.example.model.LinkedInSearchQuery
 import com.example.model.MIN_WALLET_BALANCE
+import com.example.model.PeriodicSyncState
 import com.example.model.PointTransaction
 import com.example.model.TeamAccount
 import com.example.model.UiState
 import com.example.model.VehicleLookupResult
 import com.example.worker.AutoFetchScheduler
+import com.example.worker.PeriodicFirestoreSyncScheduler
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -43,6 +49,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -146,18 +153,46 @@ class LeadXViewModel(
   private val _csvPreview = MutableStateFlow<String?>(null)
   val csvPreview: StateFlow<String?> = _csvPreview.asStateFlow()
 
+  private val _selectedCsvBatch = MutableStateFlow<Pair<CsvBatchRecord, List<LeadRecord>>?>(null)
+  val selectedCsvBatch: StateFlow<Pair<CsvBatchRecord, List<LeadRecord>>?> = _selectedCsvBatch.asStateFlow()
+
+  private val _continuousLoopActive = MutableStateFlow(false)
+  val continuousLoopActive: StateFlow<Boolean> = _continuousLoopActive.asStateFlow()
+
+  private var continuousLoopJob: Job? = null
+
   val autoFetchConfig: StateFlow<AutoFetchConfig> = AutoFetchPreferences.configFlow
   val autoFetchLogs: StateFlow<List<AutoFetchRunLog>> = AutoFetchPreferences.logsFlow
+  val csvBatches: StateFlow<List<CsvBatchRecord>> = CsvBatchManager.batchesFlow
+
+  val periodicSyncState: StateFlow<PeriodicSyncState> =
+    combine(
+        AutoFetchPreferences.periodicSyncFlow,
+        PeriodicFirestoreSyncScheduler.observeWorkStateLabel(appContext),
+      ) { state, workLabel ->
+        state.copy(
+          workerStateLabel = if (state.enabled) workLabel else "PAUSED",
+        )
+      }
+      .catch { emit(AutoFetchPreferences.getPeriodicSyncState(appContext)) }
+      .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+        initialValue = AutoFetchPreferences.getPeriodicSyncState(appContext),
+      )
 
   init {
     AutoFetchPreferences.init(appContext)
+    CsvBatchManager.init(appContext)
+    PeriodicFirestoreSyncScheduler.ensureScheduled24h(appContext)
     val stagedFromWorker = AutoFetchPreferences.consumeStagedCandidates(appContext)
     if (stagedFromWorker.isNotEmpty()) {
       _capturedCandidates.value = stagedFromWorker
     }
     val initialCfg = AutoFetchPreferences.getConfig(appContext)
     if (initialCfg.enabled && initialCfg.hasValidTarget()) {
-      AutoFetchScheduler.schedulePeriodic(appContext, initialCfg.intervalHours)
+      AutoFetchScheduler.schedulePeriodic(appContext, initialCfg.resolvedIntervalMinutes())
+      refreshContinuous24hLoop(initialCfg)
     }
 
     viewModelScope.launch {
@@ -515,13 +550,13 @@ class LeadXViewModel(
           _capturedCandidates.value = current
           _flashBanner.value =
             FlashBanner(
-              "Found ${results.size} real B2B LinkedIn lead${if (results.size > 1) "s" else ""} via Proxycurl.",
+              "Found ${results.size} real LinkedIn lead${if (results.size > 1) "s" else ""} (No API key needed).",
               isError = false,
             )
         },
         onFailure = { err ->
           _flashBanner.value =
-            FlashBanner(err.message ?: "Proxycurl B2B lead search failed.", isError = true)
+            FlashBanner(err.message ?: "No-API LinkedIn search returned no matches right now.", isError = true)
         },
       )
     }
@@ -542,7 +577,7 @@ class LeadXViewModel(
     _capturedCandidates.value = emptyList()
   }
 
-  fun saveSelectedLinkedInLeads() {
+  fun saveSelectedLinkedInLeads(clientName: String = "") {
     val account = activeAccount.value ?: return
     val selected = _capturedCandidates.value.filter { it.selected }
     if (selected.isEmpty()) {
@@ -555,9 +590,27 @@ class LeadXViewModel(
       _isBusy.value = false
       res.fold(
         onSuccess = { count ->
+          val resolvedClient =
+            clientName.trim().ifBlank {
+              autoFetchConfig.value.targetClientName.trim().ifBlank { "LinkedIn Capture" }
+            }
+          val batch =
+            withContext(Dispatchers.IO) {
+              CsvBatchManager.createBatchFromCandidates(
+                context = appContext,
+                candidates = selected,
+                ownerAccountId = account.ownerAccountId,
+                fetchedByLoginId = account.loginId,
+                clientName = resolvedClient,
+                categoryLabel = "No-API LinkedIn Capture",
+              )
+            }
           _capturedCandidates.value = emptyList()
           _flashBanner.value =
-            FlashBanner("Saved $count real LinkedIn lead${if (count > 1) "s" else ""} (-${count * 10} pts).", isError = false)
+            FlashBanner(
+              "Saved $count LinkedIn lead${if (count > 1) "s" else ""} (-${count * 10} pts) + CSV ${batch.fileName}.",
+              isError = false,
+            )
         },
         onFailure = { err ->
           _flashBanner.value =
@@ -685,25 +738,29 @@ class LeadXViewModel(
     if (updated.enabled && !updated.hasValidTarget()) {
       _flashBanner.value =
         FlashBanner(
-          "Enter at least one B2B search filter or LinkedIn URL before enabling Daily Auto-Fetch.",
+          "Enter at least one B2B search filter or LinkedIn URL before enabling 24h Auto-Fetch.",
           isError = true,
         )
       return
     }
     val account = activeAccount.value
+    val resolvedMins = updated.resolvedIntervalMinutes()
     val persisted =
       updated.copy(
+        intervalMinutes = resolvedMins,
+        intervalHours = (resolvedMins / 60L).coerceAtLeast(1L),
         activeLoginId = account?.loginId ?: updated.activeLoginId,
         ownerAccountId = account?.ownerAccountId ?: updated.ownerAccountId,
       )
     AutoFetchPreferences.saveConfig(appContext, persisted)
-    AutoFetchScheduler.syncSchedule(appContext, persisted.enabled, persisted.intervalHours)
+    AutoFetchScheduler.syncSchedule(appContext, persisted.enabled, resolvedMins)
+    refreshContinuous24hLoop(persisted)
     if (showFlashMessage) {
-      val freqLabel = AutoFetchInterval.fromHours(persisted.intervalHours).label
+      val freqLabel = AutoFetchInterval.fromMinutes(resolvedMins).label
       _flashBanner.value =
         FlashBanner(
           if (persisted.enabled) {
-            "Daily Auto-Fetch active ($freqLabel · max ${persisted.maxLeadsPerRun} leads/run)."
+            "24h Auto-Fetch active ($freqLabel · max ${persisted.maxLeadsPerRun} leads/run · Separate Client CSV ${if (persisted.autoExportSeparateCsv) "ON" else "OFF"})."
           } else {
             "Auto-Fetch settings saved (schedule paused)."
           },
@@ -715,8 +772,11 @@ class LeadXViewModel(
   fun runAutoFetchNow(draftConfig: AutoFetchConfig? = null) {
     val account = activeAccount.value
     val baseConfig = draftConfig ?: AutoFetchPreferences.getConfig(appContext)
+    val resolvedMins = baseConfig.resolvedIntervalMinutes()
     val effectiveConfig =
       baseConfig.copy(
+        intervalMinutes = resolvedMins,
+        intervalHours = (resolvedMins / 60L).coerceAtLeast(1L),
         activeLoginId = account?.loginId ?: baseConfig.activeLoginId,
         ownerAccountId = account?.ownerAccountId ?: baseConfig.ownerAccountId,
       )
@@ -730,8 +790,9 @@ class LeadXViewModel(
     }
     AutoFetchPreferences.saveConfig(appContext, effectiveConfig)
     if (effectiveConfig.enabled) {
-      AutoFetchScheduler.schedulePeriodic(appContext, effectiveConfig.intervalHours)
+      AutoFetchScheduler.schedulePeriodic(appContext, resolvedMins)
     }
+    refreshContinuous24hLoop(effectiveConfig)
 
     viewModelScope.launch {
       _isBusy.value = true
@@ -765,6 +826,231 @@ class LeadXViewModel(
     }
   }
 
+  private fun refreshContinuous24hLoop(config: AutoFetchConfig) {
+    continuousLoopJob?.cancel()
+    continuousLoopJob = null
+    if (!config.enabled || !config.continuous24hLoop || !config.hasValidTarget()) {
+      _continuousLoopActive.value = false
+      return
+    }
+    _continuousLoopActive.value = true
+    val delayMillis = config.resolvedIntervalMinutes().coerceAtLeast(15L) * 60_000L
+    continuousLoopJob =
+      viewModelScope.launch {
+        while (isActive) {
+          delay(delayMillis)
+          val latestCfg = AutoFetchPreferences.getConfig(appContext)
+          if (!latestCfg.enabled || !latestCfg.continuous24hLoop || !latestCfg.hasValidTarget()) {
+            _continuousLoopActive.value = false
+            break
+          }
+          val outcome =
+            withContext(Dispatchers.IO) {
+              AutoFetchEngine.executeAutoFetch(
+                context = appContext,
+                dao = dao,
+                repository = repository,
+                config = latestCfg,
+                notifyUser = true,
+              )
+            }
+          if (outcome.stagedCandidates.isNotEmpty()) {
+            AutoFetchPreferences.consumeStagedCandidates(appContext)
+            val current = _capturedCandidates.value.toMutableList()
+            outcome.stagedCandidates.reversed().forEach { candidate ->
+              if (candidate.profileUrl.isNotBlank()) {
+                current.removeAll { it.profileUrl.equals(candidate.profileUrl, ignoreCase = true) }
+              } else {
+                current.removeAll { it.id == candidate.id }
+              }
+              current.add(0, candidate)
+            }
+            _capturedCandidates.value = current
+          }
+        }
+      }
+  }
+
+  fun toggle24hFirestoreSyncWorker(enabled: Boolean) {
+    PeriodicFirestoreSyncScheduler.setPeriodicSyncEnabled(appContext, enabled)
+    _flashBanner.value =
+      FlashBanner(
+        if (enabled) "WorkManager 24h Firestore periodic sync scheduled."
+        else "WorkManager 24h Firestore periodic sync paused.",
+        isError = false,
+      )
+  }
+
+  fun run24hFirestoreSyncWorkerNow() {
+    viewModelScope.launch {
+      _isBusy.value = true
+      PeriodicFirestoreSyncScheduler.ensureScheduled24h(appContext)
+      val res =
+        withContext(Dispatchers.IO) {
+          repository.perform24hSimulatedFetchAndFirestoreSync()
+        }
+      _isBusy.value = false
+      res.fold(
+        onSuccess = { outcome ->
+          AutoFetchPreferences.recordPeriodicSyncOutcome(
+            context = appContext,
+            statusMessage = outcome.statusMessage,
+            firestoreUpdated = outcome.firestoreUpdated,
+            timestampMillis = outcome.timestampMillis,
+          )
+          _flashBanner.value = FlashBanner(outcome.statusMessage, isError = false)
+        },
+        onFailure = { err ->
+          val msg = "24h WorkManager sync failed: ${err.message ?: "unknown error"}"
+          AutoFetchPreferences.recordPeriodicSyncOutcome(
+            context = appContext,
+            statusMessage = msg,
+            firestoreUpdated = false,
+          )
+          _flashBanner.value = FlashBanner(msg, isError = true)
+        },
+      )
+    }
+  }
+
+  fun generateSeparateCsvs(
+    groupBy: String,
+    scopedLeads: List<LeadRecord>,
+    clientPrefix: String,
+  ) {
+    if (scopedLeads.isEmpty()) {
+      _flashBanner.value = FlashBanner("No stored leads available to split into separate CSVs.", isError = true)
+      return
+    }
+    viewModelScope.launch {
+      _isBusy.value = true
+      val created =
+        withContext(Dispatchers.IO) {
+          CsvBatchManager.splitLeadsIntoSeparateCsvs(
+            context = appContext,
+            leads = scopedLeads,
+            groupBy = groupBy,
+            customClientPrefix = clientPrefix,
+          )
+        }
+      _isBusy.value = false
+      _flashBanner.value =
+        FlashBanner(
+          "Created ${created.size} separate Client CSV file${if (created.size > 1) "s" else ""} ready for delivery.",
+          isError = false,
+        )
+    }
+  }
+
+  fun createSingleClientCsv(
+    scopedLeads: List<LeadRecord>,
+    clientName: String,
+  ) {
+    if (scopedLeads.isEmpty()) {
+      _flashBanner.value = FlashBanner("No stored leads available for client CSV export.", isError = true)
+      return
+    }
+    val cleanClient = clientName.trim().ifBlank { "Client Pack" }
+    viewModelScope.launch {
+      _isBusy.value = true
+      val batch =
+        withContext(Dispatchers.IO) {
+          CsvBatchManager.createBatchFromLeads(
+            context = appContext,
+            leads = scopedLeads,
+            clientName = cleanClient,
+            categoryLabel = "Direct Client CSV (${scopedLeads.size} leads)",
+          )
+        }
+      _isBusy.value = false
+      openCsvBatch(batch)
+      _flashBanner.value = FlashBanner("Created ${batch.fileName} for $cleanClient.", isError = false)
+    }
+  }
+
+  fun openCsvBatch(batch: CsvBatchRecord) {
+    viewModelScope.launch {
+      val parsed =
+        withContext(Dispatchers.IO) {
+          CsvBatchManager.readLeadsFromBatch(batch)
+        }
+      _selectedCsvBatch.value = batch to parsed
+    }
+  }
+
+  fun dismissCsvBatchViewer() {
+    _selectedCsvBatch.value = null
+  }
+
+  fun importClientCsvText(
+    rawCsv: String,
+    fileName: String,
+    clientName: String,
+  ) {
+    viewModelScope.launch {
+      _isBusy.value = true
+      val res =
+        withContext(Dispatchers.IO) {
+          runCatching {
+            CsvBatchManager.importExternalCsv(
+              context = appContext,
+              csvContent = rawCsv,
+              originalFileName = fileName,
+              clientName = clientName,
+            )
+          }
+        }
+      _isBusy.value = false
+      res.fold(
+        onSuccess = { (batch, parsedLeads) ->
+          _selectedCsvBatch.value = batch to parsedLeads
+          _flashBanner.value =
+            FlashBanner(
+              "Loaded ${parsedLeads.size} client leads from ${batch.fileName}.",
+              isError = false,
+            )
+        },
+        onFailure = { err ->
+          _flashBanner.value = FlashBanner(err.message ?: "Could not parse CSV file.", isError = true)
+        },
+      )
+    }
+  }
+
+  fun saveCsvBatchLeadsToDb(batch: CsvBatchRecord) {
+    val account = activeAccount.value ?: return
+    viewModelScope.launch {
+      _isBusy.value = true
+      val parsed =
+        withContext(Dispatchers.IO) {
+          CsvBatchManager.readLeadsFromBatch(batch)
+        }
+      val res = repository.importCsvLeadsToDb(account.loginId, account.ownerAccountId, parsed)
+      _isBusy.value = false
+      res.fold(
+        onSuccess = { added ->
+          _flashBanner.value =
+            FlashBanner(
+              if (added > 0) "Stored $added new lead${if (added > 1) "s" else ""} from ${batch.fileName} into DB."
+              else "All leads in ${batch.fileName} are already in your database.",
+              isError = false,
+            )
+        },
+        onFailure = { err ->
+          _flashBanner.value = FlashBanner(err.message ?: "Failed to import CSV leads into DB.", isError = true)
+        },
+      )
+    }
+  }
+
+  fun deleteCsvBatch(batchId: String) {
+    CsvBatchManager.deleteBatch(appContext, batchId)
+    if (_selectedCsvBatch.value?.first?.id == batchId) {
+      _selectedCsvBatch.value = null
+    }
+    _flashBanner.value = FlashBanner("Removed CSV file from client batches.", isError = false)
+  }
+
   companion object {
     private const val STOP_TIMEOUT_MILLIS = 5000L
 
@@ -773,6 +1059,7 @@ class LeadXViewModel(
         val app = checkNotNull(this[APPLICATION_KEY]) { "APPLICATION_KEY missing" }
         RealLeadExtractor.init(app)
         AutoFetchPreferences.init(app)
+        CsvBatchManager.init(app)
         val dao = LeadXDatabase.getInstance(app).leadXDao()
         val hasFirebase =
           runCatching { FirebaseApp.getApps(app).isNotEmpty() }.getOrDefault(false) ||

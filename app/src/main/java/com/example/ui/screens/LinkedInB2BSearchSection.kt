@@ -133,20 +133,20 @@ fun LinkedInB2BSearchCard(
           modifier = Modifier.size(18.dp),
         )
         Spacer(Modifier.width(8.dp))
-        SectionLabel("Proxycurl B2B Lead Search", color = InkBlack)
+        SectionLabel("No-API LinkedIn Lead Search", color = InkBlack)
       }
       StatusPill(
-        text = if (hasProxycurl) "PROXYCURL LIVE" else "API KEY NEEDED",
-        containerColor = if (hasProxycurl) SuccessSurface else WarningSurface,
-        contentColor = if (hasProxycurl) SuccessInk else WarningInk,
-        dotColor = if (hasProxycurl) SuccessDot else null,
+        text = "NO API NEEDED",
+        containerColor = SuccessSurface,
+        contentColor = SuccessInk,
+        dotColor = SuccessDot,
       )
     }
 
     Spacer(Modifier.height(8.dp))
     Text(
       text =
-        "Search real B2B decision-makers via Proxycurl Person Search API by role, company, industry, and location.",
+        "Fetch real B2B LinkedIn profiles, roles, companies, and bio info directly from live web indexes without needing any paid API key.",
       style = MaterialTheme.typography.bodyMedium,
       color = InkGraphite,
     )
@@ -304,30 +304,7 @@ fun LinkedInB2BSearchCard(
         Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(8.dp))
       }
-      Text("Search B2B Leads via Proxycurl", fontWeight = FontWeight.Bold)
-    }
-
-    if (!hasProxycurl) {
-      Spacer(Modifier.height(8.dp))
-      OutlinedButton(
-        onClick = onOpenApiKeys,
-        border = BorderStroke(1.dp, HairlineBorder),
-        shape = RoundedCornerShape(10.dp),
-        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("open_proxycurl_key_button"),
-      ) {
-        Icon(
-          Icons.Rounded.Key,
-          contentDescription = null,
-          tint = InkBlack,
-          modifier = Modifier.size(16.dp),
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-          "Configure Proxycurl API Key",
-          color = InkBlack,
-          fontWeight = FontWeight.SemiBold,
-        )
-      }
+      Text("Fetch LinkedIn Leads (No API)", fontWeight = FontWeight.Bold)
     }
   }
 }
@@ -340,8 +317,9 @@ fun StructuredLeadResultsList(
   onToggleCandidate: (String) -> Unit,
   onSelectAll: (Boolean) -> Unit,
   onClearCandidates: () -> Unit,
-  onSaveSelected: () -> Unit,
+  onSaveSelected: (String) -> Unit,
 ) {
+  var clientBatchName by rememberSaveable { mutableStateOf("") }
   val selectedCount = remember(candidates) { candidates.count { it.selected } }
   val allSelected = remember(candidates) { candidates.isNotEmpty() && candidates.all { it.selected } }
   val totalCost = selectedCount * LINKEDIN_COST_PER_LEAD
@@ -391,14 +369,14 @@ fun StructuredLeadResultsList(
           )
           Spacer(Modifier.height(10.dp))
           Text(
-            text = "Run a Proxycurl B2B search or capture LinkedIn profiles",
+            text = "Run a No-API LinkedIn search or capture profiles via URL / DOM",
             style = MaterialTheme.typography.titleMedium,
             color = InkBlack,
           )
           Spacer(Modifier.height(4.dp))
           Text(
             text =
-              "Matching leads will appear here in a structured list with role, company, industry, location, and verified contact info ($LINKEDIN_COST_PER_LEAD pts/lead on save).",
+              "Matching leads appear here with role, company, industry, location, and bio data ($LINKEDIN_COST_PER_LEAD pts/lead on DB save + auto-creates a separate Client CSV).",
             style = MaterialTheme.typography.bodyMedium,
             color = InkGraphite,
           )
@@ -471,9 +449,18 @@ fun StructuredLeadResultsList(
         }
       }
 
-      Spacer(Modifier.height(14.dp))
+      Spacer(Modifier.height(12.dp))
+      OutlinedTextField(
+        value = clientBatchName,
+        onValueChange = { clientBatchName = it },
+        label = { Text("Client / Separate CSV Name (optional, e.g. Acme Client)") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth().testTag("save_client_csv_name_input"),
+      )
+
+      Spacer(Modifier.height(10.dp))
       Button(
-        onClick = onSaveSelected,
+        onClick = { onSaveSelected(clientBatchName) },
         enabled = !isBusy && selectedCount > 0,
         colors = ButtonDefaults.buttonColors(containerColor = InkBlack, contentColor = PureWhite),
         shape = RoundedCornerShape(12.dp),
@@ -483,7 +470,7 @@ fun StructuredLeadResultsList(
         Spacer(Modifier.width(8.dp))
         Text(
           text =
-            "Save $selectedCount Lead${if (selectedCount > 1) "s" else ""} (-${formatPoints(totalCost)} pts)",
+            "Save $selectedCount Lead${if (selectedCount > 1) "s" else ""} & CSV (-${formatPoints(totalCost)} pts)",
           fontWeight = FontWeight.Bold,
         )
       }

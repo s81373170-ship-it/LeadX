@@ -51,10 +51,10 @@ object ApkShareHelper {
   }
 
   fun inspectInstalledApk(context: Context): InstalledApkStatus {
-    val appInfo = context.applicationInfo
-    val splits = appInfo.splitSourceDirs?.filter { it.isNotBlank() }.orEmpty()
+    val appInfo = runCatching { context.applicationInfo }.getOrNull()
+    val splits = appInfo?.splitSourceDirs?.filter { it.isNotBlank() }.orEmpty()
     val metaData =
-      appInfo.metaData
+      appInfo?.metaData
         ?: runCatching {
           val pm = context.packageManager
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -68,7 +68,7 @@ object ApkShareHelper {
           }
         }.getOrNull()
     val metaRequiresSplits = metaData?.getBoolean("com.android.vending.splits.required", false) == true
-    val sourcePath = appInfo.sourceDir.orEmpty()
+    val sourcePath = appInfo?.sourceDir.orEmpty()
     val sizeBytes = runCatching { if (sourcePath.isNotBlank()) File(sourcePath).length() else 0L }.getOrDefault(0L)
     val sizeMb = sizeBytes / (1024.0 * 1024.0)
     val sizeText =
@@ -78,8 +78,8 @@ object ApkShareHelper {
       isUniversalApk = splits.isEmpty() && !metaRequiresSplits,
       sourcePath = sourcePath,
       sizeMbText = sizeText,
-      versionName = BuildConfig.VERSION_NAME,
-      versionCode = BuildConfig.VERSION_CODE,
+      versionName = runCatching { BuildConfig.VERSION_NAME }.getOrDefault("1.0"),
+      versionCode = runCatching { BuildConfig.VERSION_CODE }.getOrDefault(1),
       splitCount = if (splits.isNotEmpty()) splits.size else if (metaRequiresSplits) 1 else 0,
     )
   }

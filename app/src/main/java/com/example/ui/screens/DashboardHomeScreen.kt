@@ -108,6 +108,7 @@ fun DashboardHomeScreen(
   allLeads: List<LeadRecord>,
   allTransactions: List<PointTransaction>,
   autoFetchConfig: AutoFetchConfig,
+  csvBatchesCount: Int = 0,
   flashBanner: FlashBanner?,
   isBusy: Boolean,
   isGoogleConnected: Boolean,
@@ -468,7 +469,7 @@ fun DashboardHomeScreen(
       ) {
         DashboardFetchTile(
           title = "LinkedIn B2B",
-          subtitle = "Proxycurl Search & URL",
+          subtitle = "No-API Search & DOM",
           badge = "$LINKEDIN_COST_PER_LEAD PTS",
           icon = Icons.Rounded.Hub,
           testTag = "launch_linkedin_button",
@@ -511,13 +512,13 @@ fun DashboardHomeScreen(
             }
             Spacer(Modifier.width(12.dp))
             Column {
-              Text("Daily Auto-Fetch & Digest", style = MaterialTheme.typography.titleMedium, color = InkBlack)
+              Text("24h Continuous Auto-Fetch & CSVs", style = MaterialTheme.typography.titleMedium, color = InkBlack)
               Text(
                 text =
                   if (autoFetchConfig.enabled) {
-                    "${AutoFetchInterval.fromHours(autoFetchConfig.intervalHours).label} · ${autoFetchConfig.totalAutoFetchedCount} fetched"
+                    "${AutoFetchInterval.fromMinutes(autoFetchConfig.resolvedIntervalMinutes()).label} · ${autoFetchConfig.totalAutoFetchedCount} fetched · $csvBatchesCount CSVs"
                   } else {
-                    "Schedule everyday automatic contact & bio fetching"
+                    "24h No-API auto lead generation & separate client CSVs"
                   },
                 style = MaterialTheme.typography.bodyMedium,
                 color = InkGraphite,
@@ -620,7 +621,9 @@ fun DashboardHomeScreen(
               SectionLabel(stringResource(R.string.app_build_verified_label), color = InkMuted)
               Spacer(Modifier.height(2.dp))
               Text(
-                text = com.example.BuildConfig.APPLICATION_ID,
+                text =
+                  if (androidx.compose.ui.platform.LocalInspectionMode.current) "com.aistudio.leadxpro.vkmqrx"
+                  else com.example.BuildConfig.APPLICATION_ID,
                 fontFamily = MonoFontFamily,
                 style = MaterialTheme.typography.labelSmall,
                 color = InkGraphite,
@@ -825,5 +828,35 @@ private fun DashboardTxRow(tx: PointTransaction) {
         color = InkGraphite,
       )
     }
+  }
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, showSystemUi = true, name = "Owner Dashboard Preview")
+@Composable
+private fun DashboardHomeScreenPreview() {
+  com.example.ui.theme.LeadXTheme {
+    DashboardHomeScreen(
+      entryLabel = "Owner Dashboard · Local Room DB",
+      account = TeamAccount(loginId = "OWN1001", fullName = "Aarav Mehta", balance = 25_000L),
+      allAccounts = listOf(TeamAccount(loginId = "OWN1001", fullName = "Aarav Mehta", balance = 25_000L)),
+      allLeads = emptyList(),
+      allTransactions = emptyList(),
+      autoFetchConfig = AutoFetchConfig(),
+      csvBatchesCount = 2,
+      flashBanner = null,
+      isBusy = false,
+      isGoogleConnected = false,
+      onDismissFlash = {},
+      onSwitchTeamId = {},
+      onConnectGoogle = {},
+      onSignOutGoogle = {},
+      onSyncCloud = {},
+      onOpenApiKeys = {},
+      onTopUp = {},
+      onOpenFetchTab = {},
+      onNavigateTab = {},
+      onOpenTransferScreen = {},
+      onExportOwnerCsv = {},
+    )
   }
 }

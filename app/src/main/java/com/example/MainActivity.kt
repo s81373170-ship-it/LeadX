@@ -9,6 +9,7 @@ import androidx.activity.enableEdgeToEdge
 import com.example.data.RealLeadExtractor
 import com.example.ui.LeadXApp
 import com.example.ui.theme.LeadXTheme
+import com.example.worker.PeriodicFirestoreSyncScheduler
 import com.google.firebase.FirebaseApp
 
 class MainActivity : ComponentActivity() {
@@ -16,6 +17,7 @@ class MainActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     runCatching { FirebaseApp.initializeApp(this) }
     runCatching { RealLeadExtractor.init(this) }
+    runCatching { PeriodicFirestoreSyncScheduler.ensureScheduled24h(applicationContext) }
     enableEdgeToEdge(
       statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
       navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),

@@ -151,27 +151,38 @@ class LeadXUiRobolectricTest {
       composeRule.onAllNodesWithTag("save_linkedin_leads_button").fetchSemanticsNodes().isNotEmpty()
     }
     composeRule.onNodeWithTag("save_linkedin_leads_button").performScrollTo().performClick()
+    composeRule.waitUntil(timeoutMillis = 5_000) {
+      composeRule.onAllNodesWithTag("save_linkedin_leads_button").fetchSemanticsNodes().isEmpty()
+    }
 
     // Number Plate tab
-    composeRule.onNodeWithTag("segment_tab_1").performClick()
+    composeRule.onNodeWithTag("segment_tab_1").performScrollTo().performClick()
     composeRule.waitUntil(timeoutMillis = 5_000) {
       composeRule.onAllNodesWithTag("fetch_vehicle_lead_button").fetchSemanticsNodes().isNotEmpty()
     }
-    composeRule.onNodeWithTag("plate_number_input").performTextInput("MH02AB1234")
+    composeRule.onNodeWithTag("plate_number_input").performScrollTo().performTextInput("MH02AB1234")
     composeRule.onNodeWithTag("fetch_vehicle_lead_button").performScrollTo().performClick()
     composeRule.waitUntil(timeoutMillis = 5_000) {
       composeRule.onAllNodesWithTag("rto_only_notice").fetchSemanticsNodes().isNotEmpty()
     }
 
-    // Daily Auto-Fetch tab
-    composeRule.onNodeWithTag("segment_tab_2").performClick()
+    // Daily Auto-Fetch tab (24h loop + WorkManager 24h Firestore sync + separate client CSV settings)
+    composeRule.onNodeWithTag("segment_tab_2").performScrollTo().performClick()
     composeRule.waitUntil(timeoutMillis = 5_000) {
       composeRule.onAllNodesWithTag("autofetch_enable_switch").fetchSemanticsNodes().isNotEmpty()
     }
+    composeRule.onNodeWithTag("autofetch_freq_15").performScrollTo().performClick()
+    composeRule.onNodeWithTag("workmanager_sync_card").performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithTag("workmanager_24h_switch").performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithTag("run_workmanager_sync_now_button").performScrollTo().assertIsDisplayed().performClick()
+    composeRule.waitForIdle()
+    composeRule.onNodeWithTag("autofetch_client_input").performScrollTo().performTextInput("Acme Client")
+    composeRule.onNodeWithTag("autofetch_auto_csv_toggle").performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithTag("autofetch_continuous_loop_toggle").performScrollTo().assertIsDisplayed()
     composeRule.onNodeWithTag("autofetch_role_input").performScrollTo().performTextInput("CTO")
     composeRule.onNodeWithTag("save_autofetch_config_button").performScrollTo().performClick()
 
-    // 6. Team & Ledger tab: check form retains values on validation error, CSV preview modal, Leads & Ledger
+    // 6. Team & Ledger tab: check form retains values on validation error, CSV preview modal, Leads, Ledger & Client CSVs Hub
     composeRule.onNodeWithTag("nav_team").performClick()
     composeRule.waitUntil(timeoutMillis = 5_000) {
       composeRule.onAllNodesWithTag("share_submit_button").fetchSemanticsNodes().isNotEmpty()
@@ -197,6 +208,24 @@ class LeadXUiRobolectricTest {
 
     // Ledger sub-tab
     composeRule.onNodeWithTag("segment_tab_2").performClick()
+
+    // Client CSVs sub-tab: create separate client CSV & inspect leads directly from CSV viewer sheet
+    composeRule.onNodeWithTag("segment_tab_3").performClick()
+    composeRule.waitUntil(timeoutMillis = 5_000) {
+      composeRule.onAllNodesWithTag("create_single_client_csv_button").fetchSemanticsNodes().isNotEmpty()
+    }
+    composeRule.onNodeWithTag("csv_client_name_input").performTextInput("Client Alpha")
+    composeRule.onNodeWithTag("split_csv_company_button").assertIsDisplayed()
+    composeRule.onNodeWithTag("import_client_csv_button").assertIsDisplayed()
+    composeRule.onNodeWithTag("create_single_client_csv_button").performClick()
+    composeRule.waitUntil(timeoutMillis = 5_000) {
+      composeRule.onAllNodesWithTag("csv_viewer_copy_leads_button").fetchSemanticsNodes().isNotEmpty()
+    }
+    composeRule.onNodeWithTag("csv_viewer_copy_leads_button").performClick()
+    composeRule.onNodeWithTag("close_csv_viewer_button").performClick()
+    composeRule.waitUntil(timeoutMillis = 5_000) {
+      composeRule.onAllNodesWithTag("csv_batch_viewer_sheet").fetchSemanticsNodes().isEmpty()
+    }
 
     // 7. Switch to Employee role and verify Employee Dashboard renders cleanly
     composeRule.onNodeWithTag("nav_dashboard").performClick()

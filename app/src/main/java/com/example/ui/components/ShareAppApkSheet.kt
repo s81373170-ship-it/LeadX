@@ -43,11 +43,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.ApkShareHelper
+import com.example.data.InstalledApkStatus
 import com.example.ui.theme.HairlineBorder
 import com.example.ui.theme.InkBlack
 import com.example.ui.theme.InkGraphite
@@ -68,8 +70,23 @@ fun ShareAppApkSheet(
   onFeedback: (String, Boolean) -> Unit,
 ) {
   val context = LocalContext.current
+  val isPreview = LocalInspectionMode.current
   val scope = rememberCoroutineScope()
-  val status = remember(context) { ApkShareHelper.inspectInstalledApk(context) }
+  val status =
+    remember(context, isPreview) {
+      if (isPreview) {
+        InstalledApkStatus(
+          isUniversalApk = true,
+          sourcePath = "",
+          sizeMbText = "Universal APK",
+          versionName = "1.0.2",
+          versionCode = 60,
+          splitCount = 0,
+        )
+      } else {
+        ApkShareHelper.inspectInstalledApk(context)
+      }
+    }
   var isExportingApk by remember { mutableStateOf(false) }
   var isSavingDownloads by remember { mutableStateOf(false) }
   var showHowToInstall by remember { mutableStateOf(false) }

@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -44,10 +45,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.model.FlashBanner
 import com.example.model.MIN_WALLET_BALANCE
@@ -89,7 +92,9 @@ fun OwnerPointTransferScreen(
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  BackHandler { onBack() }
+  if (!LocalInspectionMode.current && LocalOnBackPressedDispatcherOwner.current != null) {
+    BackHandler { onBack() }
+  }
 
   var recipientId by rememberSaveable { mutableStateOf(teamEmployees.firstOrNull()?.loginId.orEmpty()) }
   var amountText by rememberSaveable { mutableStateOf("2000") }
@@ -373,5 +378,31 @@ fun OwnerPointTransferScreen(
 
       Spacer(Modifier.height(24.dp))
     }
+  }
+}
+
+@Preview(showBackground = true, showSystemUi = true, name = "Owner Point Transfer Preview")
+@Composable
+private fun OwnerPointTransferScreenPreview() {
+  com.example.ui.theme.LeadXTheme {
+    OwnerPointTransferScreen(
+      ownerAccount = TeamAccount(loginId = "OWN1001", fullName = "Aarav Mehta", balance = 25_000L),
+      teamEmployees =
+        listOf(
+          TeamAccount(
+            loginId = "EMP001",
+            fullName = "Riya Sharma",
+            role = "employee",
+            ownerAccountId = "OWN1001",
+            balance = 5_000L,
+          ),
+        ),
+      allTransactions = emptyList(),
+      flashBanner = null,
+      isBusy = false,
+      onTransferPoints = { _, _ -> },
+      onDismissFlash = {},
+      onBack = {},
+    )
   }
 }

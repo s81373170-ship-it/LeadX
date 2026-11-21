@@ -36,10 +36,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.ui.theme.HairlineBorder
 import com.example.ui.theme.InkBlack
 import com.example.ui.theme.InkGraphite
+import com.example.ui.theme.LeadXTheme
 import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.PureWhite
 import com.example.ui.theme.SoftAlabaster
@@ -205,6 +207,19 @@ fun ApkDownloadQrCard(
           }
         }
       }
+    }
+  }
+}
+
+@Preview(showBackground = true, name = "APK Download QR Card")
+@Composable
+private fun ApkDownloadQrCardPreview() {
+  LeadXTheme {
+    Box(modifier = Modifier.padding(16.dp)) {
+      ApkDownloadQrCard(
+        url = "https://github.com/s81373170-ship-it/LeadX/releases/latest/download/LeadX-Pro.apk",
+        onCopyUrl = {},
+      )
     }
   }
 }

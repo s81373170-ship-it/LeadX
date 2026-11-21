@@ -32,7 +32,6 @@ import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -66,9 +65,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -84,12 +85,16 @@ import com.example.model.AccountRole
 import com.example.model.AppTab
 import com.example.model.AutoFetchConfig
 import com.example.model.AutoFetchRunLog
+import com.example.model.CsvBatchRecord
+import com.example.model.PeriodicSyncState
 import com.example.model.TeamAccount
 import com.example.model.UiState
 import com.example.ui.components.HowToInstallModal
 import com.example.ui.components.SectionLabel
 import com.example.ui.components.ShareAppApkSheet
+import com.example.ui.components.WorkspaceSkeletonLoadingScreen
 import com.example.ui.screens.AuthLoginScreen
+import com.example.ui.screens.CsvBatchLeadsViewerSheet
 import com.example.ui.screens.DashboardHomeScreen
 import com.example.ui.screens.LeadFetchTabsScreen
 import com.example.ui.screens.OwnerPointTransferScreen
@@ -98,6 +103,7 @@ import com.example.ui.theme.HairlineBorder
 import com.example.ui.theme.InkBlack
 import com.example.ui.theme.InkGraphite
 import com.example.ui.theme.InkMuted
+import com.example.ui.theme.LeadXTheme
 import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.PaperBackground
 import com.example.ui.theme.PureWhite
@@ -116,6 +122,26 @@ private object LeadXRoutes {
 
 @Composable
 fun LeadXApp() {
+  if (LocalInspectionMode.current) {
+    Scaffold(
+      containerColor = PaperBackground,
+      contentWindowInsets = WindowInsets.safeDrawing,
+    ) { innerPadding ->
+      AuthLoginScreen(
+        flashBanner = null,
+        isBusy = false,
+        googleUserEmail = null,
+        onSignIn = { _, _ -> },
+        onRegisterOwner = { _, _, _ -> },
+        onConnectGoogle = {},
+        onSignOutGoogle = {},
+        onDismissFlash = {},
+        modifier = Modifier.padding(innerPadding),
+      )
+    }
+    return
+  }
+
   val context = LocalContext.current
   val auth = remember(context) {
     val hasFirebase =
@@ -217,6 +243,10 @@ private fun RoleNavigatedWorkspace(
   val csvPreview by viewModel.csvPreview.collectAsStateWithLifecycle()
   val autoFetchConfig by viewModel.autoFetchConfig.collectAsStateWithLifecycle()
   val autoFetchLogs by viewModel.autoFetchLogs.collectAsStateWithLifecycle()
+  val csvBatches by viewModel.csvBatches.collectAsStateWithLifecycle()
+  val selectedCsvBatch by viewModel.selectedCsvBatch.collectAsStateWithLifecycle()
+  val continuousLoopActive by viewModel.continuousLoopActive.collectAsStateWithLifecycle()
+  val periodicSyncState by viewModel.periodicSyncState.collectAsStateWithLifecycle()
 
   val allAccounts = (accountsState as? UiState.Success)?.data.orEmpty()
   val allLeads = (leadsState as? UiState.Success)?.data.orEmpty()
@@ -349,6 +379,18 @@ private fun RoleNavigatedWorkspace(
     )
   }
 
+  val activeBatchPair = selectedCsvBatch
+  if (activeBatchPair != null) {
+    CsvBatchLeadsViewerSheet(
+      batch = activeBatchPair.first,
+      leads = activeBatchPair.second,
+      isBusy = isBusy,
+      onDismiss = viewModel::dismissCsvBatchViewer,
+      onSaveLeadsToDb = viewModel::saveCsvBatchLeadsToDb,
+      onFeedback = viewModel::showFlash,
+    )
+  }
+
   val activeCsv = csvPreview
   if (activeCsv != null) {
     ModalBottomSheet(
@@ -358,10 +400,11 @@ private fun RoleNavigatedWorkspace(
       contentColor = InkBlack,
     ) {
       Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
+        val parsedRowCount = remember(activeCsv) { CsvExporter.parseCsvLeads(activeCsv).size }
         SectionLabel("LeadX Pro · CSV Export Ready", color = InkBlack)
         Spacer(Modifier.height(4.dp))
         Text(
-          text = "${activeCsv.lines().size - 1} lead row(s) formatted for Excel/Sheets.",
+          text = "$parsedRowCount lead row(s) formatted for Excel/Sheets.",
           style = MaterialTheme.typography.bodyMedium,
           color = InkGraphite,
         )
@@ -423,12 +466,7 @@ private fun RoleNavigatedWorkspace(
   }
 
   if (accountsState is UiState.Loading) {
-    Box(
-      modifier = Modifier.fillMaxSize().background(PaperBackground),
-      contentAlignment = Alignment.Center,
-    ) {
-      CircularProgressIndicator(color = InkBlack)
-    }
+    WorkspaceSkeletonLoadingScreen(statusLabel = "Hydrating LeadX Workspace...")
     return
   }
 
@@ -537,6 +575,9 @@ private fun RoleNavigatedWorkspace(
           lastVehicleResult = lastVehicleResult,
           autoFetchConfig = autoFetchConfig,
           autoFetchLogs = autoFetchLogs,
+          csvBatches = csvBatches,
+          continuousLoopActive = continuousLoopActive,
+          periodicSyncState = periodicSyncState,
           viewModel = viewModel,
           onOpenTransferScreen = { navController.navigate(LeadXRoutes.OWNER_POINT_TRANSFER) },
           onExportOwnerCsv = {
@@ -554,9 +595,7 @@ private fun RoleNavigatedWorkspace(
           onCopyDirectApkUrl = copyDirectApkUrl,
         )
       } else {
-        Box(Modifier.fillMaxSize().background(PaperBackground), contentAlignment = Alignment.Center) {
-          CircularProgressIndicator(color = InkBlack)
-        }
+        WorkspaceSkeletonLoadingScreen(statusLabel = "Loading Owner Dashboard...")
       }
     }
 
@@ -582,9 +621,7 @@ private fun RoleNavigatedWorkspace(
           )
         }
       } else {
-        Box(Modifier.fillMaxSize().background(PaperBackground), contentAlignment = Alignment.Center) {
-          CircularProgressIndicator(color = InkBlack)
-        }
+        WorkspaceSkeletonLoadingScreen(statusLabel = "Loading Transfer Ledger...")
       }
     }
 
@@ -609,6 +646,9 @@ private fun RoleNavigatedWorkspace(
           lastVehicleResult = lastVehicleResult,
           autoFetchConfig = autoFetchConfig,
           autoFetchLogs = autoFetchLogs,
+          csvBatches = csvBatches,
+          continuousLoopActive = continuousLoopActive,
+          periodicSyncState = periodicSyncState,
           viewModel = viewModel,
           onOpenTransferScreen = {},
           onExportOwnerCsv = {},
@@ -621,9 +661,7 @@ private fun RoleNavigatedWorkspace(
           onCopyDirectApkUrl = copyDirectApkUrl,
         )
       } else {
-        Box(Modifier.fillMaxSize().background(PaperBackground), contentAlignment = Alignment.Center) {
-          CircularProgressIndicator(color = InkBlack)
-        }
+        WorkspaceSkeletonLoadingScreen(statusLabel = "Loading Employee Dashboard...")
       }
     }
   }
@@ -646,6 +684,9 @@ private fun RoleDashboardShell(
   lastVehicleResult: com.example.model.VehicleLookupResult?,
   autoFetchConfig: AutoFetchConfig,
   autoFetchLogs: List<AutoFetchRunLog>,
+  csvBatches: List<CsvBatchRecord>,
+  continuousLoopActive: Boolean,
+  periodicSyncState: PeriodicSyncState,
   viewModel: LeadXViewModel,
   onOpenTransferScreen: () -> Unit,
   onExportOwnerCsv: () -> Unit,
@@ -739,6 +780,7 @@ private fun RoleDashboardShell(
               allLeads = allLeads,
               allTransactions = allTransactions,
               autoFetchConfig = autoFetchConfig,
+              csvBatchesCount = csvBatches.size,
               flashBanner = flashBanner,
               isBusy = isBusy,
               isGoogleConnected = isGoogleConnected,
@@ -778,6 +820,9 @@ private fun RoleDashboardShell(
               flashBanner = flashBanner,
               isBusy = isBusy,
               apiConfigVersion = apiConfigVersion,
+              csvBatchesCount = csvBatches.size,
+              continuousLoopActive = continuousLoopActive,
+              periodicSyncState = periodicSyncState,
               onSelectSubTab = viewModel::selectFetchSubTab,
               onSearchLinkedInB2B = viewModel::searchLinkedInB2BLeads,
               onExtractLinkedInUrl = viewModel::extractLinkedInUrl,
@@ -790,6 +835,8 @@ private fun RoleDashboardShell(
               onRequestConsent = viewModel::requestVehicleOwnerConsent,
               onSaveAutoFetchConfig = viewModel::saveAutoFetchConfig,
               onRunAutoFetchNow = viewModel::runAutoFetchNow,
+              onTogglePeriodicFirestoreSync = viewModel::toggle24hFirestoreSyncWorker,
+              onRunPeriodicFirestoreSyncNow = viewModel::run24hFirestoreSyncWorkerNow,
               onShowMessage = { msg, isErr -> viewModel.showFlash(msg, isErr) },
               onOpenApiKeys = onOpenApiKeys,
               onDismissFlash = viewModel::clearFlash,
@@ -802,12 +849,18 @@ private fun RoleDashboardShell(
               allAccounts = allAccounts,
               allLeads = allLeads,
               allTransactions = allTransactions,
+              csvBatches = csvBatches,
               flashBanner = flashBanner,
               isBusy = isBusy,
               onSharePoints = viewModel::sharePoints,
               onCreateEmployee = viewModel::createEmployeeAccount,
               onCreateOwner = viewModel::createOwnerAccount,
               onPreviewCsv = viewModel::openCsvPreview,
+              onSplitCsvs = viewModel::generateSeparateCsvs,
+              onCreateSingleClientCsv = viewModel::createSingleClientCsv,
+              onOpenCsvBatch = viewModel::openCsvBatch,
+              onImportClientCsv = viewModel::importClientCsvText,
+              onDeleteCsvBatch = viewModel::deleteCsvBatch,
               onOpenShareApk = onOpenShareApk,
               onDismissFlash = viewModel::clearFlash,
               onBackDashboard = { viewModel.selectTab(AppTab.DASHBOARD) },
@@ -815,5 +868,21 @@ private fun RoleDashboardShell(
         }
       }
     }
+  }
+}
+
+@Preview(showBackground = true, showSystemUi = true, name = "LeadX App Preview")
+@Composable
+private fun LeadXAppPreview() {
+  LeadXTheme {
+    LeadXApp()
+  }
+}
+
+@Preview(showBackground = true, showSystemUi = true, name = "LeadX Skeleton Loading Preview")
+@Composable
+private fun LeadXAppLoadingPreview() {
+  LeadXTheme {
+    WorkspaceSkeletonLoadingScreen(statusLabel = "Hydrating LeadX Workspace...")
   }
 }

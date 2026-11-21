@@ -1,6 +1,7 @@
 package com.example.worker
 
 import android.content.Context
+import androidx.work.Configuration
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -34,6 +35,7 @@ class DailyAutoFetchWorker(
             runCatching { FirebaseApp.initializeApp(applicationContext) != null }.getOrDefault(false)
         RealLeadExtractor.init(applicationContext)
         AutoFetchPreferences.init(applicationContext)
+        com.example.data.CsvBatchManager.init(applicationContext)
 
         val config = AutoFetchPreferences.getConfig(applicationContext)
         if (!config.enabled) {
@@ -63,30 +65,41 @@ class DailyAutoFetchWorker(
 object AutoFetchScheduler {
   private const val UNIQUE_WORK_NAME = "leadx_daily_auto_fetch"
 
-  fun syncSchedule(context: Context, enabled: Boolean, intervalHours: Long) {
+  private fun safeWorkManager(context: Context): WorkManager? =
+    runCatching { WorkManager.getInstance(context.applicationContext) }
+      .recoverCatching {
+        WorkManager.initialize(
+          context.applicationContext,
+          Configuration.Builder().build(),
+        )
+        WorkManager.getInstance(context.applicationContext)
+      }
+      .getOrNull()
+
+  fun syncSchedule(context: Context, enabled: Boolean, intervalMinutes: Long) {
     if (enabled) {
-      schedulePeriodic(context, intervalHours)
+      schedulePeriodic(context, intervalMinutes)
     } else {
       cancelPeriodic(context)
     }
   }
 
-  fun schedulePeriodic(context: Context, intervalHours: Long) {
+  fun schedulePeriodic(context: Context, intervalMinutes: Long) {
     runCatching {
-      val clampedHours = intervalHours.coerceAtLeast(1L)
+      val clampedMinutes = intervalMinutes.coerceAtLeast(15L)
       val constraints =
         Constraints.Builder()
           .setRequiredNetworkType(NetworkType.CONNECTED)
           .build()
 
       val request =
-        PeriodicWorkRequestBuilder<DailyAutoFetchWorker>(clampedHours, TimeUnit.HOURS)
+        PeriodicWorkRequestBuilder<DailyAutoFetchWorker>(clampedMinutes, TimeUnit.MINUTES)
           .setConstraints(constraints)
           .addTag(UNIQUE_WORK_NAME)
           .build()
 
-      WorkManager.getInstance(context.applicationContext)
-        .enqueueUniquePeriodicWork(
+      safeWorkManager(context)
+        ?.enqueueUniquePeriodicWork(
           UNIQUE_WORK_NAME,
           ExistingPeriodicWorkPolicy.UPDATE,
           request,
@@ -96,8 +109,7 @@ object AutoFetchScheduler {
 
   fun cancelPeriodic(context: Context) {
     runCatching {
-      WorkManager.getInstance(context.applicationContext)
-        .cancelUniqueWork(UNIQUE_WORK_NAME)
+      safeWorkManager(context)?.cancelUniqueWork(UNIQUE_WORK_NAME)
     }
   }
 }

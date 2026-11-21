@@ -7,6 +7,7 @@ import com.example.model.AccountRole
 import com.example.model.MIN_WALLET_BALANCE
 import com.example.model.TeamAccount
 import com.example.model.VEHICLE_CHECK_COST
+import kotlinx.coroutines.flow.first
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -427,5 +428,257 @@ class LeadXDomainTest {
     val bitmap = com.google.zxing.BinaryBitmap(com.google.zxing.common.HybridBinarizer(source))
     val decoded = com.google.zxing.qrcode.QRCodeReader().decode(bitmap)
     assertEquals(url, decoded.text)
+  }
+
+  @Test
+  fun noApiLinkedInSearch_buildsWebQueryAndParsesDuckDuckGoAndBingResults() {
+    val query =
+      com.example.model.LinkedInSearchQuery(
+        roleTitle = "Founder",
+        companyName = "FinGrid",
+        industry = "Fintech",
+        city = "Bengaluru",
+        countryCode = "IN",
+      )
+    val webQuery = RealLeadExtractor.buildLinkedInWebQuery(query)
+    assertTrue(webQuery.contains("site:linkedin.com/in"))
+    assertTrue(webQuery.contains("\"Founder\""))
+    assertTrue(webQuery.contains("\"FinGrid\""))
+    assertTrue(webQuery.contains("Bengaluru"))
+    assertTrue(webQuery.contains("India"))
+
+    val ddgHtml =
+      """
+      <div class="result results_links">
+        <a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.linkedin.com%2Fin%2Fkavita-rao">Kavita Rao - Founder - FinGrid | LinkedIn</a>
+        <div class="result__snippet">Location: Bengaluru, India. Contact: kavita@fingrid.in · +91 98111 22334</div>
+      </div>
+      """.trimIndent()
+    val ddgParsed = RealLeadExtractor.parseDuckDuckGoLinkedInResults(ddgHtml, query)
+    assertEquals(1, ddgParsed.size)
+    assertEquals("Kavita Rao", ddgParsed[0].name)
+    assertEquals("Founder", ddgParsed[0].title)
+    assertEquals("FinGrid", ddgParsed[0].company)
+    assertEquals("kavita@fingrid.in", ddgParsed[0].email)
+    assertEquals("+91 98111 22334", ddgParsed[0].phone)
+    assertEquals("https://www.linkedin.com/in/kavita-rao", ddgParsed[0].profileUrl)
+
+    val bingHtml =
+      """
+      <li class="b_algo">
+        <h2><a href="https://www.linkedin.com/in/arjun-kapoor?trk=public">Arjun Kapoor - CTO at PayStack India | LinkedIn</a></h2>
+        <p>Based in Mumbai. Email: arjun@paystack.in</p>
+      </li>
+      """.trimIndent()
+    val bingParsed = RealLeadExtractor.parseBingLinkedInResults(bingHtml, query)
+    assertEquals(1, bingParsed.size)
+    assertEquals("Arjun Kapoor", bingParsed[0].name)
+    assertEquals("CTO", bingParsed[0].title)
+    assertEquals("PayStack India", bingParsed[0].company)
+    assertEquals("arjun@paystack.in", bingParsed[0].email)
+    assertEquals("https://www.linkedin.com/in/arjun-kapoor", bingParsed[0].profileUrl)
+
+    // Blank filter fails cleanly without requiring any API key
+    val emptySearch = RealLeadExtractor.searchLinkedInNoApi(com.example.model.LinkedInSearchQuery())
+    assertTrue(emptySearch.isFailure)
+  }
+
+  @Test
+  fun csvExporter_parsesRfc4180CsvWithCommasQuotesAndCustomHeaders() {
+    val lead =
+      com.example.model.LeadRecord(
+        id = "lead_roundtrip",
+        ownerAccountId = "OWN1001",
+        fetchedByLoginId = "EMP001",
+        source = "linkedin",
+        name = "Arundhati Bhattacharya",
+        title = "Chairperson & \"CEO\"",
+        company = "Salesforce, India",
+        email = "arundhati@example.com",
+        phone = "+919820012345",
+        industry = "Enterprise SaaS",
+        location = "Mumbai, India",
+        vehicleDetails = "Bio: Cloud leader, enterprise transformation",
+        profileUrl = "https://www.linkedin.com/in/arundhati",
+        consentGranted = true,
+        pointsCost = 10L,
+      )
+    val csv = com.example.data.CsvExporter.buildLeadsCsv(listOf(lead))
+    val parsed = com.example.data.CsvExporter.parseCsvLeads(csv)
+    assertEquals(1, parsed.size)
+    assertEquals("Arundhati Bhattacharya", parsed[0].name)
+    assertEquals("Chairperson & \"CEO\"", parsed[0].title)
+    assertEquals("Salesforce, India", parsed[0].company)
+    assertEquals("arundhati@example.com", parsed[0].email)
+    assertEquals("Bio: Cloud leader, enterprise transformation", parsed[0].vehicleDetails)
+
+    // Custom header external client CSV
+    val externalCsv =
+      """
+      Full Name,Role,Organization,Work Email,Mobile,City,LinkedIn
+      "Meera Iyer","VP Marketing","Zoho Corp","meera@zoho.example","+91 98400 55667","Chennai","https://www.linkedin.com/in/meera-iyer"
+      """.trimIndent()
+    val customParsed = com.example.data.CsvExporter.parseCsvLeads(externalCsv)
+    assertEquals(1, customParsed.size)
+    assertEquals("Meera Iyer", customParsed[0].name)
+    assertEquals("VP Marketing", customParsed[0].title)
+    assertEquals("Zoho Corp", customParsed[0].company)
+    assertEquals("meera@zoho.example", customParsed[0].email)
+    assertEquals("Chennai", customParsed[0].location)
+  }
+
+  @Test
+  fun csvBatchManager_createsSeparateClientCsvsSplitsAndReadsDirectClientLeads() {
+    val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+    com.example.data.CsvBatchManager.init(context)
+
+    val sampleLeads =
+      listOf(
+        com.example.model.LeadRecord(
+          id = "l1",
+          ownerAccountId = "OWN1001",
+          fetchedByLoginId = "OWN1001",
+          source = "linkedin",
+          name = "Priya Verma",
+          title = "Head of Growth",
+          company = "FinGrid",
+          email = "priya@fingrid.in",
+          phone = "+919800011111",
+          location = "Bengaluru, India",
+          profileUrl = "https://www.linkedin.com/in/priya-verma",
+        ),
+        com.example.model.LeadRecord(
+          id = "l2",
+          ownerAccountId = "OWN1001",
+          fetchedByLoginId = "OWN1001",
+          source = "linkedin",
+          name = "Rohan Gupta",
+          title = "Director Sales",
+          company = "CloudBridge",
+          email = "rohan@cloudbridge.in",
+          phone = "+919800022222",
+          location = "Mumbai, India",
+          profileUrl = "https://www.linkedin.com/in/rohan-gupta",
+        ),
+      )
+
+    val splitByCompany =
+      com.example.data.CsvBatchManager.splitLeadsIntoSeparateCsvs(
+        context = context,
+        leads = sampleLeads,
+        groupBy = "COMPANY",
+        customClientPrefix = "ClientA",
+      )
+    assertEquals(2, splitByCompany.size)
+    assertTrue(splitByCompany.all { java.io.File(it.filePath).exists() && it.fileName.endsWith(".csv") })
+
+    val finGridBatch = splitByCompany.first { it.clientName.contains("FinGrid") }
+    val leadsFromCsv = com.example.data.CsvBatchManager.readLeadsFromBatch(finGridBatch)
+    assertEquals(1, leadsFromCsv.size)
+    assertEquals("Priya Verma", leadsFromCsv[0].name)
+
+    val deliveryText = com.example.data.CsvBatchManager.buildClientDeliveryTextFromCsv(finGridBatch, leadsFromCsv)
+    assertTrue(deliveryText.contains("Priya Verma"))
+    assertTrue(deliveryText.contains("priya@fingrid.in"))
+    assertTrue(deliveryText.contains(finGridBatch.fileName))
+
+    val externalRaw =
+      "Name,Title,Company,Email,Phone,Location,ProfileUrl\n" +
+        "\"Dev Shah\",\"CEO\",\"NextPay\",\"dev@nextpay.in\",\"+919988776655\",\"Pune\",\"https://www.linkedin.com/in/dev-shah\""
+    val (importedBatch, importedLeads) =
+      com.example.data.CsvBatchManager.importExternalCsv(
+        context = context,
+        csvContent = externalRaw,
+        originalFileName = "nextpay_leads.csv",
+        clientName = "NextPay Client",
+      )
+    assertEquals("NextPay Client", importedBatch.clientName)
+    assertEquals(1, importedLeads.size)
+    assertEquals("Dev Shah", importedLeads[0].name)
+  }
+
+  @Test
+  fun autoFetch24h_supports15MinIntervalAndClientCsvSettingsPersistence() {
+    val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+    com.example.data.AutoFetchPreferences.init(context)
+
+    val cfg =
+      com.example.model.AutoFetchConfig(
+        enabled = true,
+        intervalHours = 1L,
+        intervalMinutes = com.example.model.AutoFetchInterval.EVERY_15_MIN.minutes,
+        maxLeadsPerRun = 8,
+        autoSaveToWallet = true,
+        autoExportSeparateCsv = true,
+        continuous24hLoop = true,
+        targetClientName = "Acme B2B Client",
+        roleTitle = "VP Sales",
+        city = "Mumbai",
+      )
+    assertEquals(15L, cfg.resolvedIntervalMinutes())
+    com.example.data.AutoFetchPreferences.saveConfig(context, cfg)
+
+    val loaded = com.example.data.AutoFetchPreferences.getConfig(context)
+    assertEquals(15L, loaded.resolvedIntervalMinutes())
+    assertTrue(loaded.autoExportSeparateCsv)
+    assertTrue(loaded.continuous24hLoop)
+    assertEquals("Acme B2B Client", loaded.targetClientName)
+  }
+
+  @Test
+  fun periodicFirestoreSyncScheduler_schedules24hWorkRequestWithNetworkConstraintAndTogglesCleanly() {
+    val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+    androidx.work.testing.WorkManagerTestInitHelper.initializeTestWorkManager(context)
+    com.example.data.AutoFetchPreferences.init(context)
+
+    val spec = com.example.worker.PeriodicFirestoreSyncScheduler.buildPeriodicWorkRequest().workSpec
+    assertEquals(java.util.concurrent.TimeUnit.HOURS.toMillis(24L), spec.intervalDuration)
+    assertEquals(androidx.work.NetworkType.CONNECTED, spec.constraints.requiredNetworkType)
+
+    com.example.worker.PeriodicFirestoreSyncScheduler.setPeriodicSyncEnabled(context, true)
+    com.example.worker.PeriodicFirestoreSyncScheduler.ensureScheduled24h(context)
+
+    val wm = androidx.work.WorkManager.getInstance(context)
+    val infos = wm.getWorkInfosForUniqueWork(com.example.worker.PeriodicFirestoreSyncScheduler.UNIQUE_PERIODIC_SYNC_WORK).get()
+    assertEquals(1, infos.size)
+    assertEquals(androidx.work.WorkInfo.State.ENQUEUED, infos[0].state)
+    assertTrue(infos[0].tags.contains(com.example.worker.PeriodicFirestoreSyncScheduler.UNIQUE_PERIODIC_SYNC_WORK))
+
+    com.example.worker.PeriodicFirestoreSyncScheduler.setPeriodicSyncEnabled(context, false)
+    val afterDisable = wm.getWorkInfosForUniqueWork(com.example.worker.PeriodicFirestoreSyncScheduler.UNIQUE_PERIODIC_SYNC_WORK).get()
+    assertTrue(afterDisable.isEmpty() || afterDisable.all { it.state == androidx.work.WorkInfo.State.CANCELLED })
+
+    // Re-enable cleanly
+    com.example.worker.PeriodicFirestoreSyncScheduler.setPeriodicSyncEnabled(context, true)
+  }
+
+  @Test
+  fun periodicFirestoreSyncWorker_doWorkSimulatesFetchUpdatesDatabaseAndIncrementsRunTelemetry() {
+    val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+    androidx.work.testing.WorkManagerTestInitHelper.initializeTestWorkManager(context)
+    com.example.data.AutoFetchPreferences.init(context)
+
+    val beforeRuns = com.example.data.AutoFetchPreferences.getPeriodicSyncState(context).totalRuns
+    val worker =
+      androidx.work.testing.TestListenableWorkerBuilder<com.example.worker.PeriodicFirestoreSyncWorker>(context)
+        .build()
+    val result = kotlinx.coroutines.runBlocking { worker.doWork() }
+
+    assertTrue(result is androidx.work.ListenableWorker.Result.Success)
+    val success = result as androidx.work.ListenableWorker.Result.Success
+    val batch = success.outputData.getString(com.example.worker.PeriodicFirestoreSyncWorker.KEY_OUTPUT_BATCH).orEmpty()
+    assertTrue(batch.startsWith("24H_SIM_"))
+    assertFalse(success.outputData.getString(com.example.worker.PeriodicFirestoreSyncWorker.KEY_OUTPUT_STATUS).isNullOrBlank())
+
+    val leads = kotlinx.coroutines.runBlocking {
+      com.example.data.local.LeadXDatabase.getInstance(context).leadXDao().observeLeads().first()
+    }
+    val syncLead = leads.firstOrNull { it.title == "Simulated 24h Background Data Sync" }
+    assertNotNull(syncLead)
+    assertEquals(0L, syncLead?.pointsCost)
+
+    val afterState = com.example.data.AutoFetchPreferences.getPeriodicSyncState(context)
+    assertEquals(beforeRuns + 1, afterState.totalRuns)
+    assertTrue(afterState.lastRunAtMillis > 0L)
   }
 }
